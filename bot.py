@@ -65,7 +65,7 @@ ROASTS = [
     "Okay but counterpoint: no.",
 ]
 
-JUMP_CHANCE = 0.12
+JUMP_CHANCE = 0.35  # raised from 0.12
 
 def get_line():
     if random.random() < 0.65 and ELON_QUOTES:
@@ -83,7 +83,14 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    if random.random() < JUMP_CHANCE and len(message.content) > 8:
+    # Instant response if mentioned
+    if bot.user in message.mentions:
+        line = get_line()
+        await message.reply(line, mention_author=False)
+        return
+
+    # Higher chance random jump-in
+    if random.random() < JUMP_CHANCE and len(message.content) > 5:
         line = get_line()
         if random.random() < 0.7:
             await message.reply(line, mention_author=False)
@@ -137,7 +144,7 @@ async def help_cmd(ctx):
     embed.add_field(name="!clear [number]", value="Delete messages (default 5)", inline=False)
     embed.add_field(name="!roast [@user]", value="Force a roast / Elon line", inline=False)
     embed.add_field(name="!elon / !quote", value="Drop a real Elon tweet", inline=False)
-    embed.add_field(name="Auto", value=f"~{int(JUMP_CHANCE*100)}% chance to jump in with real Elon lines or roasts", inline=False)
+    embed.add_field(name="Auto", value="Replies instantly when mentioned. ~35% chance to jump into other messages.", inline=False)
     await ctx.send(embed=embed)
 
 @bot.event
@@ -155,5 +162,5 @@ if __name__ == '__main__':
         print("Error: DISCORD_TOKEN not found in .env")
         print("Create a .env file with: DISCORD_TOKEN=your_bot_token")
     else:
-        print("Starting bot... (if you see 'session has been invalidated', reset the token and enable Message Content + Server Members intents)")
+        print("Starting bot...")
         bot.run(token)
