@@ -1,45 +1,37 @@
-# Elon Shit-Talk Bot
+# The Elon Experience
 
-Aggressive Discord bot that randomly jumps into conversations with real Elon Musk tweets or custom roasts, plus basic moderation.
+Roast bot + pro moderation for Discord. "AI without AI": no LLMs, no models,
+no cloud calls. Just an intent router, a pure-python TF-IDF index over real
+Elon tweets, ~450 hand-written lines, and a memory of what you said.
 
-## Setup
+## Files
+- `bot.py` - Discord glue: events, hybrid commands (every command works as `!cmd` and `/cmd`)
+- `brain.py` - intent router, TF-IDF tweet matcher, per-user memory, no-repeat picking, slur guard, jump-in policy
+- `lines.py` - the line banks (edit freely; placeholders `{name} {topic} {snippet} {callback} {fav} {count}`)
+- `moderation.py` - durations, warns, anti-spam, anti-raid, link/bad-word filters
+- `store.py` - JSON persistence (`data/state.json`, gitignored) + default config
+- `tests/` - `.venv/bin/python -m unittest discover -s tests -v`
 
-1. Create a bot at https://discord.com/developers/applications
-   - New Application → Bot → Reset Token (copy it)
-   - Enable **Message Content Intent** and **Server Members Intent**
-
-2. Invite the bot with: Send Messages, Read Message History, Manage Messages, Kick Members, Ban Members, Embed Links
-
-3. Install:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. Copy `.env.example` to `.env` and add your token:
-   ```
-   DISCORD_TOKEN=your_actual_token
-   ```
-
-5. (Optional) Add `elon_tweets_sample.csv` in the same folder for real Elon quotes. Without it the bot uses a small fallback set.
-
-6. Run:
-   ```bash
-   python bot.py
-   ```
-
-### Common issues
-- **"session has been invalidated"**: Reset the bot token in the Developer Portal and make sure Message Content + Server Members intents are enabled. Kill any other running copies of the bot.
-- CSV not found: Normal if you didn't add one. Bot still works with fallback lines.
+## How it decides to talk
+- @mention or reply to the bot: always answers (3s per-user anti-abuse throttle).
+- Otherwise: 8% random jump-in (25% if you're talking Tesla/SpaceX/Mars/X/AI/money...),
+  max once per 45s per channel and once per 120s per person. Typing indicator + human-ish delay.
+- Insults at the bot -> comeback. "test"/keyboard smash -> mockery. Questions -> dodge.
+  lol/lmao -> reply. Greetings/goodbyes -> reply. Elon topics -> a matching real tweet
+  only if TF-IDF relevance >= 0.15, otherwise a topic roast. Everything else -> a roast,
+  sometimes a callback to something you said earlier.
+- Never repeats a line to the same person within their last 30. Never echoes slurs.
 
 ## Commands
+Run `!help` or `/help` in Discord for the full list.
 
-- `!kick @user [reason]`
-- `!ban @user [reason]`
-- `!clear [number]`
-- `!roast [@user]` — forces a roast or Elon line
-- `!elon` / `!quote` — drops a real Elon tweet
-- `!help`
+## Bot permissions needed
+Moderate Members, Kick Members, Ban Members, Manage Messages, Manage Channels,
+Manage Roles (for lock/unlock), Read Message History, Send Messages, Embed Links.
+The bot's role must be ABOVE the roles of anyone it should timeout/kick/ban.
+Invite with scopes `bot` + `applications.commands`. Enable Message Content and
+Server Members intents in the Developer Portal.
 
-It has a ~12% chance to randomly reply in any channel. Adjust `JUMP_CHANCE` in `bot.py` if needed.
-
-Have fun. Don't get the server banned.
+## Run
+systemd user service `elon-bot` (`systemctl --user restart elon-bot`,
+`journalctl --user -u elon-bot -f`). Token lives in `.env` (never commit it).
