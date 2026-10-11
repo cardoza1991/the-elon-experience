@@ -65,7 +65,7 @@ ROASTS = [
     "Okay but counterpoint: no.",
 ]
 
-JUMP_CHANCE = 0.35  # raised from 0.12
+JUMP_CHANCE = 0.35
 
 def get_line():
     if random.random() < 0.65 and ELON_QUOTES:
@@ -76,7 +76,12 @@ def get_line():
 async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
     print('------')
-    await bot.change_presence(activity=discord.Game(name="talking shit | !help"))
+    # Force online status
+    await bot.change_presence(
+        status=discord.Status.online,
+        activity=discord.Game(name="talking shit | !help")
+    )
+    print("Status set to online")
 
 @bot.event
 async def on_message(message):
