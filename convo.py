@@ -21,31 +21,64 @@ from brain import STOP, clean_text, content_terms, detect_topic, snippet_of, tok
 _REFLECT = {
     "i": "you", "me": "you", "my": "your", "mine": "yours", "myself": "yourself", "am": "are",
     "i'm": "you're", "im": "you're", "i've": "you've", "ive": "you've", "i'll": "you'll", "i'd": "you'd",
-    "you": "me", "u": "me", "your": "my", "ur": "my", "yours": "mine", "yourself": "myself",
+    "your": "my", "ur": "my", "yer": "my", "yours": "mine", "yourself": "myself", "urself": "myself",
     "you're": "I'm", "youre": "I'm", "you've": "I've", "you'll": "I'll", "you'd": "I'd",
-    "we": "you", "us": "you", "our": "your", "was": "was", "were": "were",
+    "we": "you", "us": "you", "our": "your",
 }
-_BIGRAMS = [(r"\byou are\b", "I am"), (r"\bu are\b", "I am"), (r"\bare you\b", "am I"),
-            (r"\byou were\b", "I was"), (r"\bi am\b", "you are"), (r"\bi was\b", "you were")]
+# multi-word swaps first so verbs agree ('you aren't' -> 'I'm not', never 'me aren't')
+_BIGRAMS = [
+    (r"\b(you|u) (are|r) not\b", "I am not"), (r"\b(you|u) (aren'?t|arent)\b", "I'm not"),
+    (r"\b(you'?re|youre) not\b", "I'm not"), (r"\b(you|u) (are|r)\b", "I am"), (r"\b(aren'?t|arent) (you|u)\b", "am I not"),
+    (r"\b(are|r) (you|u)\b", "am I"), (r"\b(you|u) (weren'?t|wasn'?t)\b", "I wasn't"), (r"\b(you|u) (were|was)\b", "I was"),
+    (r"\b(were|was) (you|u)\b", "was I"), (r"\b(you|u) is\b", "I am"), (r"\b(you|u) has\b", "I have"),
+    (r"\b(you|u) does\b", "I do"), (r"\b(you|u) doesn'?t\b", "I don't"),
+    (r"\bi'?m not\b", "you're not"), (r"\bi am not\b", "you are not"), (r"\bi am\b", "you are"),
+    (r"\bi wasn'?t\b", "you weren't"), (r"\bi was\b", "you were"), (r"\bam i\b", "are you"), (r"\bwas i\b", "were you"),
+    (r"\bi is\b", "you are"), (r"\bi aint\b", "you aint"),
+]
+# words after which a bare 'you' is the subject of a new clause ('because you suck' -> 'because I suck')
+_SUBJ_PREV = {"because", "cuz", "cause", "bc", "coz", "since", "that", "if", "when", "and", "but", "so", "think",
+              "know", "said", "says", "like", "until", "unless", "while", "where", "why", "how", "what", "who",
+              "whether", "or", "maybe", "then", "cos", "guess", "hope", "bet", "feel", "wish"}
+_AGREE_FIX = [
+    (r"\bI (are|is)\b", "I am"), (r"\bI (aren'?t|isn'?t|arent)\b", "I'm not"), (r"\bI were\b", "I was"),
+    (r"\bI weren'?t\b", "I wasn't"), (r"\bI has\b", "I have"), (r"\bI does\b", "I do"), (r"\bI doesn'?t\b", "I don't"),
+    (r"\bme (are|is|am)\b", "I am"), (r"\bme (aren'?t|isn'?t)\b", "I'm not"), (r"\bme (was|were)\b", "I was"),
+    (r"\bI'm (are|is|am)\b", "I'm"), (r"\byou're (are|is|am)\b", "you're"), (r"\bI am (are|is|am)\b", "I am"),
+    (r"\byou am\b", "you are"), (r"\byou is\b", "you are"), (r"\byou was\b", "you were"), (r"\byou wasn'?t\b", "you weren't"),
+]
+AGREE_BAD_RE = re.compile(r"\b(me (are|am|is|aren'?t|isn'?t|were|was|do|don'?t|have|can|will)|"
+                          r"I (are|aren'?t|is|isn'?t|were|weren'?t|has|does|doesn'?t)|you (am|is|isn'?t|was|wasn'?t)|"
+                          r"myself (are|is|am)|I'm (are|is|am)|I am (are|is|am))\b")
 _TRAIL_FILLER = re.compile(r"(\s+(lol|lmao|lmfao|tho|though|bro|man|dude|haha+|fr|ngl|tbh|rn|honestly|lowkey))+$", re.I)
 PRONOUN_REFS = {"it", "that", "this", "them", "those", "that one", "this one", "him", "her", "these"}
 
 
 def reflect(fragment):
+    """Swap speaker/bot perspective with verb agreement: 'you aren't making sense' -> 'I'm not making sense'."""
     s = " " + fragment.strip() + " "
     marks = {}
     for i, (rx, rep) in enumerate(_BIGRAMS):
         key = f"\x00{i}\x00"
-        s = re.sub(rx, key, s, flags=re.I)
+        s = re.sub(rx, f" {key} ", s, flags=re.I)
         marks[key] = rep
+    words = s.split()
     out = []
-    for w in s.split():
+    for i, w in enumerate(words):
         if w in marks:
             out.append(marks[w])
             continue
         low = w.lower()
+        if low in ("you", "u", "ya"):
+            prev = words[i - 1].lower() if i else ""
+            subject = (i == 0 or prev in _SUBJ_PREV) and i + 1 < len(words)
+            out.append("I" if subject else "me")
+            continue
         out.append(_REFLECT.get(low, w))
-    return " ".join(out)
+    text = " ".join(out)
+    for rx, rep in _AGREE_FIX:
+        text = re.sub(rx, rep, text)
+    return text
 
 
 def clean_slot(x, max_words=8, max_len=50):
@@ -101,7 +134,7 @@ def slot_ok(x, kind="free", max_words=6):
     if not x or "..." in x or len(x) > 50 or re.search(r"[,;:()\[\]]", x):
         return False
     words = x.split()
-    if len(words) > max_words or CONJ_START.match(x):
+    if len(words) > max_words or CONJ_START.match(x) or AGREE_BAD_RE.search(x):
         return False
     if not [w for w in words if w.lower().strip("'") not in STOP and len(w.strip("'")) > 1]:
         return False
@@ -162,7 +195,7 @@ END_START_RE = _rx(r"^\W*((ok|okay|alright|aight|well|anyway|k)[\s,.!]+)?(bye+|g
                    r"leave me alone|go away|stop talking|be quiet|i'?m done|done talking)\b")
 END_ANY_RE = _rx(r"\b(leave me alone|stop talking to me|stop replying|i'?m done (with|talking to) (you|u)|gtg|gotta go)\b")
 # ---- abuse aimed at the bot (fires back instead of ending) ----
-PROFANITY_RE = _rx(r"\b(fuck\w*|f+u+|stfu|gtfo|shit\w*|bitch\w*|dick\w*|cunt\w*|ass(hole|hat|wipe)|(your|ur|my) ass|dumbass|jackass|"
+PROFANITY_RE = _rx(r"\b(fuck\w*|f+u+|stfu|gtfo|gfys|kys|foh|smd|stfd|kill (your ?self|urself)|go die|shit\w*|bitch\w*|dick\w*|cunt\w*|ass(hole|hat|wipe)|(your|ur|my) ass|dumbass|jackass|"
                    r"bastard|prick|twat|wanker|douche\w*|motherfuck\w*|piss off|screw (you|u|off)|suck my|eat shit|"
                    r"shut (the fuck |tf )?up|bozo|loser|idiot|moron|stupid|dumb|trash|garbage|useless|clown|clanker|"
                    r"pathetic|cringe|lame|worthless|annoying|ugly|suck|sucks|hate (you|u|this))\b")
@@ -171,9 +204,9 @@ BENIGN_RE = _rx(r"\b(fuck (yeah|yes|yea|ya)|hell yeah|holy shit|no shit|good shi
 THIRD_PARTY_RE = _rx(r"\b(my|his|her|their|he|she|they|him|them|that guy|this guy|boss|mom|dad|teacher|team)\b")
 INSULT_WORD_RE = _rx(r"\b(trash|garbage|useless|clown|clanker|bozo|loser|idiot|moron|stupid|dumb|pathetic|cringe|lame|"
                      r"worthless|annoying|ugly|bitch|dickhead|dick|asshole|dumbass|jackass|bastard|prick|twat|wanker|"
-                     r"douche(bag)?|cunt|mid|boring|dogshit|shit bot|bad bot|npc|joke)\b")
+                     r"douche(bag)?|cunt|mid|boring|dogshit|shit bot|bad bot|npc|joke|clanker|bozo)\b")
 AIM_RE = _rx(r"\b(you|u|ur|your|you'?re|youre|yourself|ya|bot|elon|clanker|this thing)\b")
-STFU_RE = _rx(r"\b(stfu|gtfo|shut (the fuck |tf )?up|fuck (you|u|off|this bot)|f+ ?u+|piss off|eat shit|screw (you|u)|"
+STFU_RE = _rx(r"\b(stfu|gtfo|gfys|kys|foh|smd|stfd|go die|kill (your ?self|urself)|shut (the fuck |tf )?up|fuck (you|u|off|this bot)|f+ ?u+|piss off|eat shit|screw (you|u)|"
               r"suck my|kiss my ass)\b")
 CRISIS_RE = _rx(r"\b(kill myself|killing myself|suicid\w*|want to die|wanna die|end it all|end my life|self[- ]harm|"
                 r"cut myself|don'?t want to (live|be alive))\b")
@@ -187,6 +220,7 @@ DISBELIEF_RE = _rx(r"^\W*(no way|no shot|nah no way|bro what|bruh+|really|deadas
 JAB_RE = _rx(r"(not much of a (conversationalist|talker|convo)|conversationalist|(you|u|this bot|the bot|it) "
              r"(can'?t|cant|don'?t|doesn'?t) (talk|hold a conversation|chat|converse)|\bboring\b|"
              r"that'?s all (you|u) (got|have)|is that all (you|u)|you'?re not (even )?funny|not funny|"
+             r"(you|u) (aren'?t|arent|are not|r not|ain'?t) (even |that |very |)funny|"
              r"(you|u) only (say|know) (one|the same)|repetitive|say something (else|real|new|smart)|"
              r"\bweak( roast| ass)?\b|that was weak|try harder|mid roast|dry (ass )?(bot|convo|conversation)|"
              r"(you|u) suck at (talking|this|conversations?)|(you|u)'?re? (so )?dry)")
@@ -196,10 +230,45 @@ BOT_NAME_WORDS = {"elon", "bot", "clanker", "experience", "musk"}
 _LEAD_FILLER = re.compile(r"^(even|really|actually|just|ever|like,|literally|honestly|still)\s+", re.I)
 SUBJECT_KEYS = {"opinion", "i_like", "i_hate", "my_x", "what_is", "i_want", "i_think", "should_i", "i_feel"}
 ADDRESS_RE = _rx(r"\b(you|u|ur|your|yours|you'?re|youre|yourself|elon|bot)\b|\?\s*$")
-SENSITIVE_RE = _rx(r"\b(gay|lesbian|bi|bisexual|trans|transgender|queer|nonbinary|non-binary|asexual|black|white|asian|"
-                   r"latino|latina|hispanic|mexican|jewish|jew|muslim|christian|catholic|hindu|atheist|buddhist|sikh|"
-                   r"disabled|autistic|autism|adhd|deaf|blind|immigrant|arab|indian|african|native american|"
-                   r"pregnant|religious)\b")
+SENSITIVE_RE = brain.PROTECTED_RE
+# a protected trait thrown at the bot as an insult ('yer just so gay', 'gay bot'): clean, deflating comeback
+TRAIT_INSULT_RE = _rx(r"\b(you|u|ur|yer|ya|you'?re|youre|u r|bot|elon|clanker|this (bot|thing)|it)\s+(are\s+|r\s+|is\s+|'?re\s+)?"
+                      r"((just|so|such|a|an|really|kinda|lowkey|hella|mad|super|totally|literally|fr|straight up)\s+)*"
+                      r"(gay|homo|queer|autistic|retarded|tranny|lesbian|disabled)\b|"
+                      r"\b(so|that'?s|thats|how|sounds|super|hella) (gay|homo|autistic|retarded)\b|"
+                      r"\b(gay|homo|autistic|retarded)( ass)? (bot|clanker|elon|ai|robot)\b")
+SLANG_ABUSE = r"gfys|kys|foh|smd|stfu|gtfo|stfd"
+# whole-message taunts / dismissive banter (only when aimed at the bot: in a session, a mention or naming it)
+GAMER_TAUNT_RE = _rx(r"^\W*((ok|okay|lol|lmao|bro|nah|imagine|massive|huge|big)\W+)?(get good|git gud|skill issue|"
+                     r"ratio(ed)?|l \+ ratio|\bl\b|cope( harder)?|seethe|mald(ing)?|cry about it|cry more|stay mad|"
+                     r"npc( behavior| behaviour| energy)?|mid|womp womp|nobody asked|who asked|didn'?t ask|ez|"
+                     r"(l|npc|mid|bozo|trash) bot|bot (diff|is mid|is trash)|diff)"
+                     r"(\W+(bot|elon|clanker|bro|lol|lmao|lmfao|kid|buddy|pal|harder|\+ ratio|\+ l))*\W*$")
+GRASS_RE = _rx(r"^\W*((ok|okay|lol|bro|nah|just|go)\W+)?(touch (some )?grass|go outside|get a life|log off|"
+               r"smoke a (phatty|fatty|joint|blunt|bowl)|hit the gym|go to sleep|go to bed|take a shower|"
+               r"get off (the )?(internet|discord)|go outside and play)"
+               r"(\W+(bot|elon|clanker|bro|lol|lmao|kid|buddy|pal|already|dude))*\W*$")
+MOCK_PITY_RE = _rx(r"^\W*(oh+|aw+|aww+|ohh+|ah+)[\s,!.]+(you |the |my |)poor\b|\bpoor (baby|lil|little) (bot|guy|thing|elon)?|"
+                   r"^\W*poor baby\b|\b(is|did) (the |my |lil |little )?(bot|elon|clanker|robot|baby) (sad|crying|upset|mad|"
+                   r"hurt|get (its|his) feelings hurt)|\bcry (more|harder|me a river)\b|\bboo ?hoo\b|\bsowwy\b|"
+                   r"\bdid i hurt (your|ur|its|the bot'?s) (feelings|feewings)|\bwah+ wah+\b|\baww+ (is|did) (it|he|the|someone)\b|"
+                   r"\b(so|how) sad\W*(bot|elon)?\W*$")
+CALLED_RE = _rx(r"\b(do|does|would|will|did) (you|u|it) (hate|mind|like|care|get (mad|upset|angry)|hate it|feel some ?type of way)"
+                r"( (about|when|that))?( (being|getting|people|me|i|we|when people))? ?(call(ed|ing)?|nam(ed|ing)|referr(ed|ing))\b|"
+                r"\bcan (i|we) (call|name) (you|u)\b|\b(stop|keep) calling (you|u)\b|\bwhat should (i|we) call (you|u)\b|"
+                r"\bi'?(ll|m gonna|m going to|ma) (keep )?(calling|call) (you|u)\b")
+BROKE_RE = _rx(r"\bi (think i |just |might have |prob(ably)? )?(broke|broken|crashed|killed|bricked|fried|glitched) "
+               r"(it|you|u|the bot|this bot|this thing|elon|him|ur brain|your brain|the ai)\b|"
+               r"\b(you'?re|youre|u r|ur|you are|it'?s|its|bot is|bot'?s|is it|are you|r u|is the bot|elon is|is elon) "
+               r"(so |completely |totally |fully |just |kinda |)(broken|broke|glitch(ing|ed|y)?|bugged|bugging|buggy|"
+               r"malfunctioning|lagging|crashing|crashed|short ?circuit(ing|ed)?|fried|cooked|dead|down)\b|"
+               r"\b(you|u|it|bot|elon) (broke|crashed|glitched|bugged out|died|short ?circuited)\b")
+NO_SENSE_RE = _rx(r"\b(you|u|ur|you'?re|youre|bot|elon|it|this|that)( are| r| is| re|'re)?( not| n'?t)? ?"
+                  r"(aren'?t|arent|isn'?t|don'?t|doesn'?t|do not|does not|can'?t|not|never)? ?(even )?"
+                  r"(make|making|makes|talking|speaking) (any |no |zero |a lick of |)sense\b|"
+                  r"\b(make|makes|making) (no|zero) sense\b|\bnonsense\b|\bgibberish\b|\bword salad\b|"
+                  r"\bwhat (are|r) (you|u) (even )?(on about|talking about|saying)\b|\byou'?re not making sense\b")
+ECHO_Q_RE = _rx(r"^\W*(?:(?:your|ur|yer|ya|the|a|my)\s+)?(?P<x>[a-z][\w'-]*(?:\s+[a-z][\w'-]*){0,3})\s*\?{1,}")
 VOCATIVE_RE = _rx(r"^\W*((yo|hey|ok|okay|so|well|bro|dude|man|elon|bot|clanker|lol|lmao|ayo|bruh)[\s,!.:]+)+")
 
 TONE_RE = _rx(r"\b(be (less offensive|nicer|nice|kind|kinder|polite|respectful|cool|chill)|less (offensive|toxic|mean|rude)|"
@@ -379,7 +448,14 @@ class Conversations:
         if cfg is not None and not cfg.get("abuse_enabled", True):
             return False
         t = clean_text(text)
-        if not t or not PROFANITY_RE.search(t):
+        if not t:
+            return False
+        aimed = in_context or bool(NAME_RE.search(t)) or bool(AIM_RE.search(t))
+        if TRAIT_INSULT_RE.search(t) and aimed and not re.match(r"^\W*(are|r|is) (you|u)\b", t, re.I):
+            return True
+        if (GAMER_TAUNT_RE.search(t) or GRASS_RE.search(t)) and (in_context or NAME_RE.search(t)):
+            return True
+        if not PROFANITY_RE.search(t):
             return False
         if (brain.PRAISE_RE.search(t) or BENIGN_RE.search(t)) and not brain.INSULT_RE.search(t) and not STFU_RE.search(t):
             return False  # 'this bot is fucking hilarious', 'fuck yeah you're right'
@@ -433,8 +509,33 @@ class Conversations:
             insult = ""
         ctx = self._ctx(s or Session(uid, now, 0), u, name, t, extra)
         ctx.update(insult=insult, hits=str(hits[0]), hits1=str(hits[0] + 1))
+        touchy = bool(SENSITIVE_RE.search(t) or brain.SELF_HARM_RE.search(t) or TRAIT_INSULT_RE.search(t))
+        if touchy:  # never quote or riff on protected traits / self-harm
+            ctx.update(snippet="", insult="", kw="")
+        special = None
+        if TRAIT_INSULT_RE.search(t):
+            special = "abuse_trait"
+        elif brain.SELF_HARM_RE.search(t):
+            special = "abuse_kys"
+        elif GAMER_TAUNT_RE.search(t):
+            special = "abuse_gamer"
+        elif GRASS_RE.search(t):
+            special = "abuse_grass"
+        if special:
+            line = None
+            by = {"abuse_gamer": C.ABUSE_GAMER_BY, "abuse_grass": C.ABUSE_GRASS_BY}.get(special, {})
+            for pat in by:  # lines that answer the exact taunt ('smoke a phatty' -> smoke lines)
+                if re.search(pat, t, re.I) and self.rng.random() < 0.8:
+                    line = self.brain.pick(f"{special}:{pat}", ctx, u, extra)
+                    break
+            line = line or self.brain.pick(special, ctx, u, extra)
+            if line:
+                if self.brain.guard.hit(line, extra) or SENSITIVE_RE.search(line):
+                    line = "Sit down. Next."
+                self.brain.store.mark_dirty()
+                return brain.Reply(special, line[0].upper() + line[1:], "line", None, round(level, 2))
         line = None
-        if self.rng.random() < 0.65:  # prefer lines that quote what they said
+        if not touchy and self.rng.random() < 0.65:  # prefer lines that quote what they said
             line = self.brain.pick(f"abuse_{tier}_ref", ctx, u, extra)
         if not line:
             line = self.brain.pick(f"abuse_{tier}", ctx, u, extra)
@@ -557,6 +658,21 @@ class Conversations:
         })
         return ctx
 
+    def _echo_q(self, t, s):
+        """'your vibe firewall???' -> 'vibe firewall' when they're quoting the bot's own last line back."""
+        if not s.last_bot_line or len(tokens(t)) > 7:
+            return ""
+        m = ECHO_Q_RE.search(t)
+        if not m:
+            return ""
+        x = m.group("x").strip()
+        words = [w for w in x.lower().split() if w not in STOP]
+        if not words or SENSITIVE_RE.search(x) or self.brain.guard.hit(x):
+            return ""
+        if re.search(r"\b" + re.escape(x.lower()) + r"\b", s.last_bot_line.lower()):
+            return x
+        return ""
+
     def _rude_name(self, t, speaker, extra=()):
         """'Batdaddy has been quite rude to you' -> 'Batdaddy' (never a pronoun, the speaker or the bot)."""
         me = {w.lower() for w in re.findall(r"[\w'-]+", speaker or "")}
@@ -600,6 +716,14 @@ class Conversations:
         # 1. leaving / crisis
         if CRISIS_RE.search(t):
             key, out, allow_follow = "crisis", C.CRISIS[0].format(name=ctx["name"]), False
+        elif CALLED_RE.search(t) and not STFU_RE.search(t) and not TRAIT_INSULT_RE.search(t):
+            key = "called"  # 'do you mind being called clanker' is a question, not abuse
+            out = self._pick("called", ctx, u, extra_block)
+        elif (MOCK_PITY_RE.search(t) or (KIND_RE.search(t) and self.abuse_level((gid, uid), cfg, now) > 0.3)) \
+                and not self.is_abuse(t, in_context=True, cfg=cfg):
+            # 'oh, poor bot' / sympathy right after they were hostile = sarcasm: comeback, not gratitude
+            key, allow_follow = "mock_pity", False
+            out = self._pick("mock_pity", ctx, u, extra_block)
         elif KIND_RE.search(t) and not self.is_abuse(t, in_context=True, cfg=cfg):
             key, allow_follow = "kind", False
             rude = self._rude_name(t, name, extra_block)
@@ -618,6 +742,18 @@ class Conversations:
             f = self._facts(u)
             f["creator_claims"] = f.get("creator_claims", 0) + 1
             out = self._pick("creator", ctx, u, extra_block)
+        elif CALLED_RE.search(t):
+            key = "called"
+            out = self._pick("called", ctx, u, extra_block)
+        elif BROKE_RE.search(t):
+            key = "broke_it"
+            out = self._pick("broke_it", ctx, u, extra_block)
+        elif NO_SENSE_RE.search(t):
+            key = "no_sense"
+            out = self._pick("no_sense", ctx, u, extra_block)
+        elif self._echo_q(t, s):
+            key = "echo_q"
+            out = self._pick("echo_q", dict(ctx, x=self._echo_q(t, s)), u, extra_block)
         elif SUMMON_RE.search(t):
             key, allow_follow = "summon", False
             out = self._pick("summon", ctx, u, extra_block)
@@ -764,6 +900,8 @@ class Conversations:
 
         if self.brain.guard.hit(out, extra_block):
             key, out = "generic", "Okay but counterpoint: no. What else you got?"
+        if SENSITIVE_RE.search(t) and SENSITIVE_RE.search(out) and key not in ("sensitive_ack",):
+            key, out = "generic", self._pick("generic", dict(ctx, snippet="", kw=""), u, extra_block) or "Anyway. Next."
         if kind == "line" and out[:1].islower():
             out = out[0].upper() + out[1:]
 

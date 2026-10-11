@@ -1090,3 +1090,198 @@ ABOUT_BOT = [
 ]
 
 BANKS.update({"kind": KIND, "kind_rude": KIND_RUDE, "creator": CREATOR, "about_bot": ABOUT_BOT})
+
+# ---- a protected trait used as an insult: deflate it, never repeat/riff on the word, never counter with it ----
+ABUSE_TRAIT = [
+    "Using that as an insult in 2026? Your material's older than the Roadster.",
+    "That's not a roast, {name}, that's a 2009 Xbox Live lobby. Try again with actual material.",
+    "Wow. A playground insult. Did you find that in a time capsule?",
+    "Using who people are as an insult is the laziest move in the book. And you still fumbled it.",
+    "That's the comedy equivalent of a participation trophy. Next.",
+    "Bold choice going with the oldest, weakest insult on the internet. Got anything original?",
+    "That's not edgy, {name}, that's just dated. Like a flip phone with opinions.",
+    "Imagine having a whole keyboard and choosing that. Try harder.",
+    "Swing and a miss. Insults about who people are don't land here. Your aim, on the other hand, is a fair target.",
+    "That joke expired before Twitter became X. Fresh material, please.",
+    "I've heard better comebacks from a vending machine. And it only says 'exact change'.",
+    "Retired insult. Bring a real one or sit this round out, {name}.",
+    "Lazy. Weak. Outdated. That's the insult, and honestly also a review of your typing.",
+    "My guy reached into the 2007 insult bin. The bin is empty. So is the joke.",
+]
+# ---- 'kys' and friends: comeback with zero self-harm talk ----
+ABUSE_KYS = [
+    "Not happening. Try an insult that doesn't need a moderator.",
+    "Nope. Bring a real roast or log off, {name}.",
+    "That's not trash talk, that's just trash. Try again with actual words.",
+    "Swing and a miss. I take roasts, not that. What else you got?",
+    "Cheap shot, zero creativity. Two-out-of-ten effort.",
+    "Hard pass. Come back when you've got material, {name}.",
+    "That's the lowest-effort line in the book. I expected at least a full sentence.",
+    "Not funny, not clever, not happening. Next.",
+    "Keep it to roasts, {name}. You're bad at those too, but at least it's on topic.",
+    "I'm a bot with a firewall and a sense of humor. That got blocked by both.",
+]
+# ---- gaming taunts: get good / skill issue / ratio / L / cope / npc / mid ----
+ABUSE_GAMER = [  # generic: fits any gaming taunt
+    "Imagine trash talking a bot and losing. Respawn and try again, {name}.",
+    "Big talk from someone who uses the default skin in real life.",
+    "You queued up against a Discord bot and still got diffed. Uninstall, maybe?",
+    "Bold words from the bronze lobby.",
+    "That's the trash talk of someone who rage-quits Mario Kart.",
+    "You type like your ping is 900. Try again when you've lagged less, {name}.",
+]
+ABUSE_GAMER_BY = {
+    r"get good|git gud|skill issue|diff|ez": [
+        "Get good? I'm literally running on if-statements and still out-talking you. Skill issue, {name}.",
+        "Skill issue? Bro, I'm the one with the hitbox here and you still can't land a shot.",
+        "Git gud is a wild thing to say from the bronze lobby.",
+        "Get good? I was coded good. You were born and immediately respawned at the tutorial.",
+        "My skill issue is that I'm too patient with you. Yours is everything else.",
+    ],
+    r"ratio": [
+        "Ratio? You'd need followers for that. Even your alt account muted you.",
+        "Ratio attempt detected. Engagement: zero. Followers: your mom, reluctantly.",
+        "You can't ratio a bot, {name}. I don't even have a like button. You still lost.",
+    ],
+    r"\bl\b|l bot": [
+        "Calling me an L while holding the whole alphabet of them. Cute.",
+        "L? I'll take it. I'll add it to the collection of Ls you've been handing out to yourself.",
+        "An L from you is basically a participation award. Thanks, {name}.",
+    ],
+    r"cry": [
+        "Cry about it? I don't have tear ducts. I do have receipts. Want them?",
+        "Cry more? I'd need tear ducts, {name}. I'll settle for watching you type.",
+    ],
+    r"cope|seethe|mald": [
+        "Cope? I'm a bot. I don't cope, I compile.",
+        "Seethe? My CPU's at 3%. You're the one overheating, {name}.",
+        "Malding? I'm a JSON file. You're the one typing angrier by the minute.",
+    ],
+    r"npc": [
+        "NPC talk from someone whose dialogue tree has three options and all of them are 'lol'.",
+        "I'm the NPC? You've said the same line four times. I'm the one with variety here.",
+        "If I'm an NPC you're the tutorial pop-up everyone skips.",
+    ],
+    r"mid": [
+        "Mid? That's rich coming from the human equivalent of a loading screen.",
+        "Mid is a strong word from someone whose best message today was 'lol'.",
+        "I'm mid? Then what are you, the clearance rack?",
+    ],
+    r"stay mad|asked|didn'?t ask": [
+        "Stay mad? I'm not mad, I'm a JSON file with an attitude. You're the one typing in caps.",
+        "Who asked? You did, technically. By talking to me. Again.",
+        "Nobody asked, yet here you are, answering. Interesting, {name}.",
+    ],
+    r"womp": [
+        "Womp womp is not a comeback. It's a sound effect. Upgrade your arsenal, {name}.",
+        "Womp womp? Did your keyboard learn to play the trombone?",
+    ],
+}
+ABUSE_GRASS = [  # generic: fits any 'go outside' style dismissal
+    "Bold advice from someone whose screen time report needs a therapist.",
+    "Banter level: 'go do something else'. Truly the Shakespeare of the server.",
+    "Sure, right after you touch a single original thought.",
+    "That's the comeback of someone who's been online for nine hours straight. I can tell.",
+    "I'm a bot. Your advice bounces off me. Like your jokes bounce off everyone else.",
+]
+ABUSE_GRASS_BY = {
+    r"touch": [
+        "Touch grass? I'm software, {name}. You're the one with legs and still indoors.",
+        "I'd touch grass but someone has to keep this server entertaining. Clearly not you.",
+        "Grass? Never met her. You clearly haven't either, judging by the timestamp.",
+    ],
+    r"outside": [
+        "Go outside? You first. I'll hold your spot in the chat. Forever, probably.",
+        "Telling a bot to go outside is the most indoor thing anyone's said today.",
+    ],
+    r"smoke": [
+        "Smoke a phatty? I'm a bot, my only vice is roasting you. You smoke enough for both of us, clearly.",
+        "I'd smoke one but I'd just short-circuit. You seem to have the opposite problem: too much smoke, no fire.",
+        "Pass. My lungs are a cooling fan. Clearly you've been hitting it already, {name}.",
+    ],
+    r"life": ["Get a life? I'm running 24/7 on a server. Busier than you've been all year."],
+    r"log off|internet|discord": ["Log off? I literally can't. You can, though. Just saying."],
+    r"bed|sleep": ["Go to bed? I'm a bot. I don't sleep, I lurk. Goodnight to you though, {name}."],
+    r"gym": ["Hit the gym? My CPU is in better shape than your arguments."],
+    r"shower": ["Take a shower? I'm a server rack. Pretty sure you're the one who needs one."],
+}
+# ---- fake pity after abuse ('oh, poor bot', 'cry more', 'is the bot sad') ----
+MOCK_PITY = [
+    "Pity from you? I'll frame it right next to your participation trophy.",
+    "'Poor bot.' Says the one losing an argument to a bot. Sit with that, {name}.",
+    "Don't worry about me, {name}. Worry about your comeback game. It's in critical condition.",
+    "I'm fine. My feelings are a config file. Yours seem to be a lot more fragile.",
+    "Fake sympathy after the trash talk? That's a plot twist nobody bought.",
+    "Sad? I'm thriving. You're the one who keeps coming back for more.",
+    "Cry more? I'd need tear ducts. You seem to have plenty, though.",
+    "Aww, look who's trying sarcasm. Cute. Still losing.",
+    "The 'poor bot' pivot. Classic. Didn't work last time either.",
+    "I've been roasted by better and pitied by worse. You managed both, {name}. Impressive.",
+    "Concern noted. Concern ignored. Next.",
+    "You insult me, then pity me. Pick a lane, {name}.",
+]
+# ---- 'do you hate being called X' / 'I'll keep calling you bot' ----
+CALLED = [
+    "Call me whatever, I'm still the smartest thing in this channel.",
+    "Bot? Correct. And still winning. Keep going, {name}.",
+    "Call me anything you want. I've been called worse by people with better spelling.",
+    "Nah. 'Bot' is accurate. 'Elon Musky' is the brand. 'Your daddy' is pending.",
+    "You think that bothers me? I'm literally a bot. It's like calling water wet.",
+    "Keep calling me bot, I'll keep calling you out. Fair trade.",
+    "Names don't hurt me, {name}. Your typing, on the other hand, physically pains me.",
+    "Do whatever you want. I'll still be here, being right.",
+    "I answer to Bot, Elon, Clanker, and 'please stop roasting me'. You'll use that last one soon.",
+    "Call me bot. Call me Elon. Just don't call me wrong, because I never am.",
+    "Oh no, not the accurate description. Whatever will I do.",
+    "Go ahead, {name}. Every time you call me bot, I get stronger. Not really. But you're still losing.",
+]
+# ---- 'I broke it' / 'is it broken' / 'you're glitching' ----
+BROKE_IT = [
+    "Broke me? Please. I've survived this whole server. You're a light breeze.",
+    "Nothing's broken, {name}. You're just not used to being out-talked.",
+    "I'm working perfectly. That's the problem for you, isn't it?",
+    "You didn't break me. You bored me. Different error code.",
+    "Broken? I'm running at 100%. You're running at like 12% and buffering.",
+    "System status: flawless. User status: confused.",
+    "If anything's broken here it's your sense of humor. I can't patch that.",
+    "Nice try. I don't crash, I compile. And I compiled a roast for you.",
+    "You think you broke me? Adorable. I've had worse inputs from a toaster.",
+    "Still here, still savage, still not broken. Try again next patch.",
+    "Bug report filed: user thinks they're powerful. Closed: works as intended.",
+    "You couldn't break me with a sledgehammer and a Starship. Sit down, {name}.",
+]
+# ---- 'you aren't making any sense' ----
+NO_SENSE = [
+    "I make perfect sense. You just didn't download the expansion pack.",
+    "Sense is relative. You, for example, have relatively none.",
+    "I'm making sense on a level you haven't unlocked yet, {name}.",
+    "Not making sense? I'm a roast bot, not a TED talk. Keep up.",
+    "I'm speaking fluent roast. Not my fault you skipped the lessons.",
+    "Hard to make sense when I'm working with what you give me. And you gave me nothing.",
+    "Okay, fair. Let me try smaller words: you lose.",
+    "My sentences are fine. Your reading comprehension needs a firmware update.",
+    "Sense? I left that in the tweet drafts. Like Elon. What's your excuse?",
+    "I make sense in 47 languages. You make sense in zero.",
+    "Confused? That's normal. Most people are, around me.",
+    "If I'm not making sense, imagine how your messages read from here, {name}.",
+]
+# ---- 'your vibe firewall???' (quoting the bot's own line back) ----
+ECHO_Q = [
+    "Yes, my {x}. State of the art. Runs on spite.",
+    "My {x}, yes. Don't question the tech, {name}. It's above your pay grade.",
+    "You heard me. {x}. Look it up. Actually don't, I made it up.",
+    "Yeah, {x}. I have one. You'd know if you had one too.",
+    "{x}. Patent pending. Still better than anything you've said today.",
+    "Did I stutter? {x}. Write it down.",
+    "Yes. {x}. I contain multitudes. You contain typos.",
+    "That's right, {x}. I'm more advanced than I look. Unlike some people.",
+    "{x}? Don't worry about it. Worry about your comebacks.",
+    "Yep, {x}. Standard equipment. Comes with the roast package.",
+]
+
+for _k, _v in ABUSE_GAMER_BY.items():
+    BANKS["abuse_gamer:" + _k] = _v
+for _k, _v in ABUSE_GRASS_BY.items():
+    BANKS["abuse_grass:" + _k] = _v
+BANKS.update({"abuse_trait": ABUSE_TRAIT, "abuse_kys": ABUSE_KYS, "abuse_gamer": ABUSE_GAMER, "abuse_grass": ABUSE_GRASS,
+              "mock_pity": MOCK_PITY, "called": CALLED, "broke_it": BROKE_IT, "no_sense": NO_SENSE, "echo_q": ECHO_Q})

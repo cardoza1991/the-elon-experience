@@ -71,6 +71,15 @@ def snippet_of(text, limit=60, trim=False):
     return t
 
 
+# protected traits: never echoed, never riffed on, never used as a counter-insult
+PROTECTED_RE = re.compile(
+    r"\b(gay|gays|lesbian|bi|bisexual|trans|transgender|queer|homo|homosexual|nonbinary|non-binary|asexual|black|white|"
+    r"asian|latino|latina|hispanic|mexican|jewish|jew|muslim|christian|catholic|hindu|atheist|buddhist|sikh|"
+    r"disabled|autistic|autism|adhd|deaf|blind|immigrant|arab|indian|african|native american|pregnant|religious)\b", re.I)
+# self-harm 'insults': never echoed or joked about
+SELF_HARM_RE = re.compile(r"\b(kys|kill (your ?self|urself|yaself|yoself)|go die|neck (your ?self|urself)|"
+                          r"unalive (your ?self|urself)|end (your ?self|urself))\b", re.I)
+
 VULGAR_RE = re.compile(r"\b(fuck\w*|shit\w*|bitch\w*|ass\b|asshole|dick\w*|piss\w*|cunt|bullshit|damn|hell)\b", re.I)
 
 
@@ -235,9 +244,9 @@ class TweetIndex:
 
 INSULT_RE = re.compile(
     r"\b(fuck (you|u|off|this|that)|f u|fu|stfu|shut (the fuck )?up|you suck|u suck|sucks|trash|garbage|"
-    r"dumb(ass)?|stupid|idiot|moron|bitch|loser|clown|cringe|mid|worst|hate (you|u|this)|ugly|bozo|"
+    r"dumb(ass)?|stupid|idiot|moron|bitch|loser|clown|cringe|(you'?re|youre|ur|u r|you are|bot is|this bot is|elon is) (so |kinda |lowkey |)mid|^\W*mid\W*$|worst|hate (you|u|this)|ugly|bozo|"
     r"useless|annoying|dogshit|shit bot|bad bot|ass|asshole|dipshit|dickhead|jackass|pathetic|lame|"
-    r"nobody asked|who asked|l bot|ratio|cope|seethe|kys|die|clanker|go away|piss off)\b", re.I)
+    r"nobody asked|who asked|l bot|ratio|^\W*cope|cope( harder)?\W*$|seethe|kys|(go|just|pls|please) die|clanker|go away|piss off)\b", re.I)
 PRAISE_RE = re.compile(
     r"\b(good bot|great bot|best bot|love (you|u|this bot)|goat(ed)?|based|w bot|funny|hilarious|"
     r"you'?re? (the best|funny|great|cool)|nice one|well said|thank(s| you)|ty)\b", re.I)
@@ -495,6 +504,8 @@ class Brain:
         snip = snippet_of(text)
         if len(re.findall(r"[.!?]\s+\S", snip)) >= 1:
             snip = ""  # multi-sentence messages never get parroted back whole
+        if snip and (PROTECTED_RE.search(snip) or SELF_HARM_RE.search(snip)):
+            snip = ""  # never quote protected-trait words or self-harm talk back
         if snip and (self.guard.hit(snip, extra) or len(snip) < 2):
             snip = ""
         last_topic = topic or (max(u["topics"], key=u["topics"].get) if u.get("topics") else None)
