@@ -1,0 +1,4 @@
+.env
+__pycache__/
+*.pyc
+elon_tweets_sample.csv
