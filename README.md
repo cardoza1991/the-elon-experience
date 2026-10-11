@@ -32,6 +32,10 @@ The bot's role must be ABOVE the roles of anyone it should timeout/kick/ban.
 Invite with scopes `bot` + `applications.commands`. Enable Message Content and
 Server Members intents in the Developer Portal.
 
+## Common issues
+- **"session has been invalidated"**: Reset the bot token in the Developer Portal and make sure Message Content + Server Members intents are enabled. Kill any other running copies of the bot.
+- CSV not found: normal if you didn't add `elon_tweets_sample.csv` (it's gitignored). The bot still works with a small fallback set of quotes.
+
 ## Run
 systemd user service `elon-bot` (`systemctl --user restart elon-bot`,
 `journalctl --user -u elon-bot -f`). Token lives in `.env` (never commit it).

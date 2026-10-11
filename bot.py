@@ -172,7 +172,10 @@ def name_of(member):
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
     print("------")
-    await bot.change_presence(activity=discord.Game(name="talking shit | !help"))
+    # Force online status (from e5fd83e)
+    await bot.change_presence(status=discord.Status.online,
+                              activity=discord.Game(name="talking shit | !help"))
+    print("Status set to online")
     if not bot.synced:
         bot.synced = True
         for g in bot.guilds:
