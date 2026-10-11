@@ -20,12 +20,16 @@ Aggressive Discord bot that randomly jumps into conversations with real Elon Mus
    DISCORD_TOKEN=your_actual_token
    ```
 
-5. Download a sample of Elon tweets (or use your own CSV with 'Tweet.content' and 'Language' columns) and name it `elon_tweets_sample.csv` in the same folder.
+5. (Optional) Add `elon_tweets_sample.csv` in the same folder for real Elon quotes. Without it the bot uses a small fallback set.
 
 6. Run:
    ```bash
    python bot.py
    ```
+
+### Common issues
+- **"session has been invalidated"**: Reset the bot token in the Developer Portal and make sure Message Content + Server Members intents are enabled. Kill any other running copies of the bot.
+- CSV not found: Normal if you didn't add one. Bot still works with fallback lines.
 
 ## Commands
 

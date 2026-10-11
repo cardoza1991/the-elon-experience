@@ -2,3 +2,10 @@
 __pycache__/
 *.pyc
 elon_tweets_sample.csv
+.venv/
+.~lock.*#
+bot.py.bak-*
+data/
+elon_state.json
+*.log
+.pytest_cache/
