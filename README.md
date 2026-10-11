@@ -46,6 +46,11 @@ halves every 180s: tier 1 snarky (<1.8), tier 2 savage (<3.5), tier 3 scorched e
 fire-back per 4s and 6/min per user. stfu/shut up fire back instead of ending the session. Same slur
 guard; no protected-trait attacks. `!config abuse on|off [half_life] [cooldown] [per_min]`.
 
+**Tone & manners:** "tone it down / be nice / chill / less offensive" gets an in-character answer.
+`!config tone mild|normal|savage` (mild: no vulgar lines, abuse capped at tier 1; savage: abuse starts at
+tier 2). Messages that mention or reply to someone else are never auto-answered unless they name the bot.
+Lines that just parrot your message back are capped (~1 in 4, never twice in a row).
+
 ## Commands
 Run `!help` or `/help` in Discord for the full list.
 
@@ -63,3 +68,6 @@ Server Members intents in the Developer Portal.
 ## Run
 systemd user service `elon-bot` (`systemctl --user restart elon-bot`,
 `journalctl --user -u elon-bot -f`). Token lives in `.env` (never commit it).
+Only ONE copy may run: the bot takes a lock on `data/bot.lock` and a second `python bot.py` exits
+immediately (two copies on one token = every message answered twice). Each message id is also answered
+at most once.

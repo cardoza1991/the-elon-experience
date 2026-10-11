@@ -6,9 +6,11 @@ persisted to data/state.json. No LLMs, no local models, no cloud AI calls.
 """
 import asyncio
 import datetime as dt
+import fcntl
 import os
 import random
 import signal
+from collections import OrderedDict
 from typing import Literal, Optional
 
 import discord
@@ -270,22 +272,99 @@ async def automod(message):
     return False
 
 
-async def replied_to_bot(message):
+async def reply_target(message):
+    """Who the message replies to: 'bot', 'other' or None."""
     ref = message.reference
-    if not ref or not ref.message_id:
-        return False
-    r = ref.resolved if isinstance(ref.resolved, discord.Message) else ref.cached_message
+    if not ref or not getattr(ref, "message_id", None):
+        return None
+    r = ref.resolved if isinstance(ref.resolved, discord.Message) else getattr(ref, "cached_message", None)
     if r is None:
         try:
             r = await message.channel.fetch_message(ref.message_id)
         except discord.HTTPException:
-            return False
-    return r.author.id == bot.user.id
+            return None
+    return "bot" if r.author.id == bot.user.id else "other"
+
+
+# belt-and-braces: never handle the same Discord message twice (gateway replays, double dispatch)
+_SEEN = OrderedDict()
+
+
+def first_time(message_id):
+    if message_id in _SEEN:
+        return False
+    _SEEN[message_id] = True
+    while len(_SEEN) > 5000:
+        _SEEN.popitem(last=False)
+    return True
+
+
+async def decide_reply(message):
+    """The ONLY place that decides whether/what to answer. Returns a brain.Reply or None. Never sends."""
+    g, author = message.guild, message.author
+    c = cfg(g)
+    text = message.content or ""
+    target = await reply_target(message)
+    explicit = bot.user in message.mentions or target == "bot"
+    # talking to someone else (mentions/replies to another human) and not addressing the bot
+    other_target = (target == "other" or any(m.id != bot.user.id for m in message.mentions))
+    ch = message.channel
+    parent = getattr(ch, "parent_id", None)
+    chans = {ch.id, parent} - {None}
+    chat_on = not (chans & set(c["chat_off_channels"]))
+    ignored = bool(chans & set(c["ignore_channels"]))
+    xb = c["blocklist_extra"]
+    reply = None
+    try:
+        mode = CONVO.gate(g.id, ch.id, author.id, text, explicit=explicit, cfg=c, chat_on=chat_on,
+                          ignored=ignored, other_target=other_target and not explicit)
+        if mode == "abuse":
+            reply = CONVO.reply(g.id, ch.id, author.id, name_of(author), text, cfg=c, extra_block=xb)
+        elif mode == "abuse_oneshot":
+            reply = CONVO.reply_abuse_oneshot(g.id, author.id, name_of(author), text, cfg=c, extra_block=xb)
+        elif mode == "convo":
+            if not explicit or BRAIN.allow_directed(g.id, author.id, c):
+                reply = CONVO.reply(g.id, ch.id, author.id, name_of(author), text, cfg=c, extra_block=xb)
+        elif mode == "oneshot":
+            if BRAIN.allow_directed(g.id, author.id, c):
+                reply = BRAIN.respond(g.id, author.id, name_of(author), text, directed=True, cfg=c, extra_block=xb)
+        elif not CONVO.in_session(g.id, ch.id, author.id) and BRAIN.should_jump(g.id, ch.id, author.id, text, c, parent):
+            reply = BRAIN.respond(g.id, author.id, name_of(author), text, directed=False, cfg=c, extra_block=xb)
+            if chat_on and not other_target:
+                CONVO.after_jump_in(g.id, ch.id, author.id, reply.text, c, text)
+    except Exception as e:
+        print(f"reply logic error: {type(e).__name__}: {e}")
+        reply = None
+    finally:
+        BRAIN.observe(g.id, author.id, name_of(author), text, brain.detect_topic(brain.clean_text(text)))
+    if reply is not None:
+        reply.explicit = explicit
+    return reply
+
+
+async def deliver(message, reply):
+    """The ONLY place that sends a conversational reply. Exactly one send per reply."""
+    ch, g = message.channel, message.guild
+    if not ch.permissions_for(g.me).send_messages:
+        return False
+    try:
+        async with ch.typing():
+            await asyncio.sleep(min(3.5, 0.6 + len(reply.text) / 70 + random.random() * 0.9))
+        if getattr(reply, "explicit", False) or reply.intent != "generic" or random.random() < 0.7:
+            await message.reply(reply.text, mention_author=False)
+        else:
+            await ch.send(reply.text)
+        return True
+    except discord.HTTPException as e:
+        print(f"reply failed: {e}")
+        return False
 
 
 @bot.event
 async def on_message(message):
     if message.author.bot:
+        return
+    if not first_time(message.id):
         return
     if message.guild is None:
         await bot.process_commands(message)
@@ -302,52 +381,9 @@ async def on_message(message):
         await bot.invoke(ctx)
         return
 
-    g, author = message.guild, message.author
-    c = cfg(g)
-    text = message.content or ""
-    explicit = bot.user in message.mentions or await replied_to_bot(message)
-    ch = message.channel
-    parent = getattr(ch, "parent_id", None)
-    chans = {ch.id, parent} - {None}
-    chat_on = not (chans & set(c["chat_off_channels"]))
-    ignored = bool(chans & set(c["ignore_channels"]))
-    reply = None
-    xb = c["blocklist_extra"]
-    try:
-        mode = CONVO.gate(g.id, ch.id, author.id, text, explicit=explicit, cfg=c, chat_on=chat_on, ignored=ignored)
-        if mode == "abuse":
-            reply = CONVO.reply(g.id, ch.id, author.id, name_of(author), text, cfg=c, extra_block=xb)
-        elif mode == "abuse_oneshot":
-            reply = CONVO.reply_abuse_oneshot(g.id, author.id, name_of(author), text, cfg=c, extra_block=xb)
-        elif mode == "convo":
-            if not explicit or BRAIN.allow_directed(g.id, author.id, c):
-                reply = CONVO.reply(g.id, ch.id, author.id, name_of(author), text, cfg=c, extra_block=xb)
-        elif mode == "oneshot":
-            if BRAIN.allow_directed(g.id, author.id, c):
-                reply = BRAIN.respond(g.id, author.id, name_of(author), text, directed=True, cfg=c, extra_block=xb)
-        elif not CONVO.in_session(g.id, ch.id, author.id) and BRAIN.should_jump(g.id, ch.id, author.id, text, c, parent):
-            reply = BRAIN.respond(g.id, author.id, name_of(author), text, directed=False, cfg=c, extra_block=xb)
-            if chat_on:
-                CONVO.after_jump_in(g.id, ch.id, author.id, reply.text, c, text)
-    except Exception as e:
-        print(f"reply logic error: {type(e).__name__}: {e}")
-    finally:
-        BRAIN.observe(g.id, author.id, name_of(author), text, brain.detect_topic(brain.clean_text(text)))
-
-    if reply is None:
-        return
-    perms = ch.permissions_for(g.me)
-    if not perms.send_messages:
-        return
-    try:
-        async with ch.typing():
-            await asyncio.sleep(min(3.5, 0.6 + len(reply.text) / 70 + random.random() * 0.9))
-        if explicit or reply.intent not in ("generic",) or random.random() < 0.7:
-            await message.reply(reply.text, mention_author=False)
-        else:
-            await ch.send(reply.text)
-    except discord.HTTPException as e:
-        print(f"reply failed: {e}")
+    reply = await decide_reply(message)
+    if reply is not None:
+        await deliver(message, reply)
 
 
 # ======================================================================== errors
@@ -437,6 +473,7 @@ async def help_cmd(ctx):
         "`config blocklist add|remove|list [word]` (words the bot never repeats)\n"
         "`config convo <timeout_s> [max_partners] [per_minute] [busy_speakers]`\n"
         "`config abuse on|off [half_life_s] [cooldown_s] [per_minute]`\n"
+        "`config tone mild|normal|savage`\n"
         "`config tweetthreshold <0.05-0.6>`"))
     e.set_footer(text="No AI was harmed in the making of this bot. It's all if-statements.")
     await say(ctx, embed=e, ephemeral=False)
@@ -789,6 +826,7 @@ async def config_grp(ctx):
     e.add_field(name="Conversations", value=f"{c['convo_timeout']}s sessions, {c['convo_max_partners']} partners/channel, "
                                             f"{c['convo_per_min']} replies/min, busy at {c['convo_busy_speakers']} speakers\n"
                                             f"off in: {chans(c['chat_off_channels'])}", inline=False)
+    e.add_field(name="Tone", value=c["tone"])
     e.add_field(name="Abuse retaliation", value=("on" if c["abuse_enabled"] else "off") +
                 f": half-life {c['abuse_half_life']}s, cooldown {c['abuse_cooldown']}s, {c['abuse_per_min']}/min per user",
                 inline=False)
@@ -998,6 +1036,13 @@ async def cfg_abuse(ctx, mode: Literal["on", "off"], half_life: Optional[int] = 
                       f"max {c['abuse_per_min']}/min per user")
 
 
+@_cfgcmd("tone", "Personality: mild (PG), normal, or savage")
+async def cfg_tone(ctx, level: Literal["mild", "normal", "savage"]):
+    store.set_cfg(ctx.guild.id, "tone", level)
+    await _saved(ctx, {"mild": "Tone: mild. PG mode, comebacks capped at tier 1. (Boring, but okay.)",
+                       "normal": "Tone: normal.", "savage": "Tone: savage. Comebacks start at tier 2. Good luck."}[level])
+
+
 @_cfgcmd("tweetthreshold", "How relevant a tweet must be to auto-post (0.05 loose - 0.6 strict, default 0.15)")
 async def cfg_tweetthreshold(ctx, value: commands.Range[float, 0.05, 0.6]):
     store.set_cfg(ctx.guild.id, "tweet_threshold", round(value, 3))
@@ -1011,6 +1056,19 @@ if __name__ == "__main__":
     if not token:
         print("Error: DISCORD_TOKEN not found in .env")
     else:
+        # single-instance guard: a second copy (e.g. 'python3 bot.py' in a terminal while the
+        # systemd service runs) would answer every message twice with the same token
+        os.makedirs(os.path.join(BASE, "data"), exist_ok=True)
+        _lock = open(os.path.join(BASE, "data", "bot.lock"), "w")
+        try:
+            fcntl.flock(_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print("Another copy of the bot is already running on this machine (probably the systemd service).\n"
+                  "Don't start a second one - it makes every reply happen twice.\n"
+                  "Use: systemctl --user restart elon-bot   /   journalctl --user -u elon-bot -f")
+            raise SystemExit(3)
+        _lock.write(str(os.getpid()))
+        _lock.flush()
         print("Starting bot...")
         try:
             bot.run(token)

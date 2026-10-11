@@ -111,6 +111,12 @@ SENSITIVE_RE = _rx(r"\b(gay|lesbian|bi|bisexual|trans|transgender|queer|nonbinar
                    r"pregnant|religious)\b")
 VOCATIVE_RE = _rx(r"^\W*((yo|hey|ok|okay|so|well|bro|dude|man|elon|bot|clanker|lol|lmao|ayo|bruh)[\s,!.:]+)+")
 
+TONE_RE = _rx(r"\b(be (less offensive|nicer|nice|kind|kinder|polite|respectful|cool|chill)|less (offensive|toxic|mean|rude)|"
+              r"tone it down|calm down|chill( out| bro| dude)?|stop being (so )?(mean|rude|offensive|toxic|savage)|"
+              r"(so|too) (mean|harsh|offensive|toxic|rude)|pg mode|family friendly|watch your (mouth|language|tone)|"
+              r"no need to be rude|why (are|r) (you|u) so (mean|rude|toxic))\b")
+SUMMON_RE = _rx(r"^\W*((yo|hey|hi|ayo|oi|ok|okay)[\s,]+)?(elon|bot|clanker|the elon experience|elon experience)\W*$")
+
 PATTERNS = [
     ("joke", _rx(r"\b(tell|give|got|know|say|hit me with)\b.{0,20}\bjokes?\b|^jokes?\W*$|make me laugh|say something funny")),
     ("who_are_you", _rx(r"\bwho (are|r) (you|u)\b|^what are (you|u)\W*$|\bintroduce yourself\b|\bwho made (you|u)\b")),
@@ -195,6 +201,7 @@ class Conversations:
         self.abuse = {}        # (gid, uid) -> (level, ts)   decays with abuse_half_life
         self.abuse_times = {}  # (gid, uid) -> deque of reply times (rate limit)
         self.abuse_hits = {}   # (gid, uid) -> (count in current streak, ts)
+        self._tone = "normal"
         self.brain.banks.update(C.BANKS)
         self.brain.banks["followup_q"] = [q for q in C.FOLLOWUPS if q.rstrip().endswith("?")]
         for tier in (1, 2, 3):
@@ -277,6 +284,7 @@ class Conversations:
         return len(q) < cfg.get("abuse_per_min", 6)
 
     def abuse_reply(self, gid, uid, name, text, cfg, extra=(), s=None):
+        self._tone = cfg.get("tone", "normal")
         now = self.clock()
         key = (gid, uid)
         level = self.abuse_level(key, cfg, now) + 1.0
@@ -286,6 +294,10 @@ class Conversations:
         hits = (hits[0] + 1 if now - hits[1] < cfg.get("abuse_half_life", 180) * 3 else 1, now)
         self.abuse_hits[key] = hits
         tier = self.abuse_tier(level)
+        if self._tone == "mild":
+            tier = 1
+        elif self._tone == "savage":
+            tier = max(2, tier)
         u = self.brain.store.user(gid, uid)
         u["abuse_total"] = u.get("abuse_total", 0) + 1
         t = clean_text(text)
@@ -333,8 +345,11 @@ class Conversations:
         st.ended[uid] = self.clock()
 
     # -------------------------------------------------------------- gate
-    def gate(self, gid, cid, uid, text, *, explicit=False, cfg=None, chat_on=True, ignored=False):
-        """Return 'convo', 'oneshot' or None. Call for EVERY human message (tracks channel activity)."""
+    def gate(self, gid, cid, uid, text, *, explicit=False, cfg=None, chat_on=True, ignored=False, other_target=False):
+        """Return 'abuse', 'abuse_oneshot', 'convo', 'oneshot' or None. Call for EVERY human message.
+
+        other_target: the message mentions/replies to another human (and not the bot). Then the bot
+        stays out of it unless the text names the bot ('elon'/'bot')."""
         cfg = cfg or {}
         now = self.clock()
         st = self.chan(gid, cid)
@@ -346,6 +361,8 @@ class Conversations:
             if explicit and self.is_abuse(t, in_context=True, cfg=cfg) and self.abuse_allowed((gid, uid), cfg):
                 return "abuse_oneshot"
             return "oneshot" if explicit else None
+        if other_target and not explicit and not NAME_RE.search(t):
+            return None  # they're talking to someone else: never hijack
         s0 = st.sessions.get(uid)
         if self.is_abuse(t, in_context=explicit or s0 is not None, cfg=cfg) and not (ignored and not explicit and not s0):
             if not self.abuse_allowed((gid, uid), cfg):
@@ -373,8 +390,9 @@ class Conversations:
         # a quiet 1:1 conversation is never rate-capped (anti-spam still covers floods)
         if capped and (others or busy):
             return None
+        # once someone else has talked, an answer to our old question is ambiguous: require addressing
         addressed = (bool(ADDRESS_RE.search(t)) or bool(END_START_RE.search(t) or END_ANY_RE.search(t))
-                     or bool(JAB_RE.search(t)) or (s.asked is not None and len(tokens(t)) <= 12))
+                     or bool(JAB_RE.search(t)) or bool(TONE_RE.search(t)))
         if (busy or others) and not addressed:
             return None
         return "convo"
@@ -409,6 +427,7 @@ class Conversations:
             "last": snippet_of(s.last_bot_line, 70), "opener": s.opener if s.turns else "",
             "iam": f.get("iam", ""), "job": f.get("job", ""), "place": f.get("place", ""),
             "likes": likes[-1] if likes else "", "nick": nick or "", "tweet": "",
+            "_tone": self._tone,
         })
         return ctx
 
@@ -428,6 +447,7 @@ class Conversations:
 
     def reply(self, gid, cid, uid, name, text, *, cfg=None, extra_block=()):
         cfg = cfg or {}
+        self._tone = cfg.get("tone", "normal")
         now = self.clock()
         st = self.chan(gid, cid)
         s = st.sessions.get(uid) or self._open(st, uid, now, cfg, text)
@@ -443,6 +463,12 @@ class Conversations:
         elif self.is_abuse(t, in_context=True, cfg=cfg):
             r = self.abuse_reply(gid, uid, name, t, cfg, extra_block, s)
             key, out, score, allow_follow = r.intent, r.text, r.score, False
+        elif TONE_RE.search(t):
+            key, allow_follow = "tone_req", False
+            out = self._pick("tone_req", ctx, u, extra_block)
+        elif SUMMON_RE.search(t):
+            key, allow_follow = "summon", False
+            out = self._pick("summon", ctx, u, extra_block)
         elif END_START_RE.search(t) or END_ANY_RE.search(t):
             key, ending, allow_follow = "end_convo", True, False
             out = self._pick("end_convo", ctx, u, extra_block)

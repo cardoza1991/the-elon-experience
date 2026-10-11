@@ -994,3 +994,40 @@ ABUSE_TAGS = [
 ]
 
 BANKS.update({"abuse_1": ABUSE_T1, "abuse_2": ABUSE_T2, "abuse_3": ABUSE_T3, "abuse_tag": ABUSE_TAGS})
+
+# ---------------------------------------------------------------- meta requests
+TONE_REQ = [
+    "Less offensive? Fine. PG mode activated for exactly five seconds... and we're back. What else?",
+    "Tone it down? I AM toned down, {name}. This is my indoor voice.",
+    "Be nice? Okay. You're doing great, sweetie. ...That hurt me more than it hurt you.",
+    "Chill? I'm a bot, I'm literally room temperature. You're the one sweating.",
+    "Sorry, my 'be nice' module is in the shop. Estimated repair time: two weeks. Elon weeks.",
+    "Fine. I'll be gentle. *gently roasts you* There. Happy?",
+    "Less offensive... let me check the settings... nope, it only goes up to savage.",
+    "Okay okay. Family-friendly mode: you're a very special boy, {name}. Better?",
+    "You want me to be nice? Then say something that doesn't deserve a roast. Your move.",
+    "I can be nicer. I just don't want to. But I'll consider it if you ask the mods.",
+    "Chill mode engaged. ...It didn't take. Must be your energy.",
+    "Respectfully, no. Disrespectfully, also no. But I'll keep it clean for one message: hi {name}.",
+    "Asking a roast bot to be less offensive is like asking a Cybertruck to be less pointy.",
+    "Alright, I'll dial it back to a 7. From an 11. That's a huge concession, {name}.",
+    "PG mode: you are a person, and you typed a message. That's all I'll say. Proud?",
+    "Noted. Feedback forwarded to my complaints department, which is a trash can. Anything else?",
+]
+
+SUMMON = [
+    "You rang, {name}?",
+    "Yeah? What do you want?",
+    "Present. Unfortunately for you. What's up?",
+    "That's my name. Don't wear it out. What do you need?",
+    "Summoned. This better be good, {name}.",
+    "What? I was busy judging the server.",
+    "Speak, mortal.",
+    "I'm here. Make it quick, I've got people to roast.",
+    "Yo. Who are we roasting today?",
+    "Hm? Oh, it's you. What now?",
+    "Reporting for duty. What's the damage, {name}?",
+    "You said the magic word. Now say something interesting.",
+]
+
+BANKS.update({"tone_req": TONE_REQ, "summon": SUMMON})

@@ -68,6 +68,20 @@ def snippet_of(text, limit=60):
     return t
 
 
+VULGAR_RE = re.compile(r"\b(fuck\w*|shit\w*|bitch\w*|ass\b|asshole|dick\w*|piss\w*|cunt|bullshit|damn|hell)\b", re.I)
+
+
+def fix_caps(text):
+    """Capitalise sentence starts (outside quotes) so '{x}' at a sentence start reads right."""
+    parts = text.split('"')
+    for i in range(0, len(parts), 2):  # even parts are outside quotes
+        p = re.sub(r"((?<!\.\.)[.!?]\s+)([a-z])", lambda m: m.group(1) + m.group(2).upper(), parts[i])
+        if i == 0:
+            p = re.sub(r"^(\s*)([a-z])", lambda m: m.group(1) + m.group(2).upper(), p)
+        parts[i] = p
+    return '"'.join(parts)
+
+
 # ---------------------------------------------------------------- slur guard
 
 _LEET = str.maketrans({"1": "i", "!": "i", "|": "i", "3": "e", "0": "o", "4": "a",
@@ -312,10 +326,11 @@ class Cooldown:
 # ---------------------------------------------------------------- the brain
 
 class Reply:
-    __slots__ = ("intent", "text", "kind", "topic", "score")
+    __slots__ = ("intent", "text", "kind", "topic", "score", "explicit")
 
     def __init__(self, intent, text, kind="line", topic=None, score=None):
         self.intent, self.text, self.kind, self.topic, self.score = intent, text, kind, topic, score
+        self.explicit = False
 
     def __repr__(self):
         return f"Reply({self.intent!r}, {self.kind!r}, {self.text!r})"
@@ -378,27 +393,58 @@ class Brain:
         except (KeyError, IndexError, ValueError):
             return None
 
+    NO_ECHO_BANKS = {"followup", "followup_q", "abuse_tag"}
+
+    def echo_allowed(self, u):
+        """Lines that quote their whole message back: max ~1 in 4 replies, never two in a row."""
+        return not any(u.get("echo", [])[-3:])
+
     def pick(self, bank_name, ctx, u, extra=()):
         bank = self.banks[bank_name]
         recent = u.setdefault("recent", [])
+        record = bank_name not in self.NO_ECHO_BANKS
+        mild = ctx.get("_tone") == "mild"
+        no_echo = record and not self.echo_allowed(u)
+        if ctx.get("snippet") and (no_echo or (mild and VULGAR_RE.search(ctx["snippet"]))):
+            ctx = dict(ctx, snippet="")
+        said = ctx.get("_said") or ""
         options = []
         for i, line in enumerate(bank):
+            if mild and VULGAR_RE.search(line):
+                continue
             lid = f"{bank_name}:{i}"
             text = self._fill(line, ctx)
             if text:
-                options.append((lid, text))
+                # an "echo" is any line that parrots their whole message back (snippet or a slot that grabbed it all)
+                echo = "{snippet}" in line or (len(said) > 6 and said in text.lower())
+                if mild and VULGAR_RE.search(text):
+                    continue
+                options.append((lid, fix_caps(text), echo, "{x}" in line and bool(ctx.get("x"))))
+        if no_echo:
+            options = [o for o in options if not o[2]] or options
         if not options:
             return None
         fresh = [o for o in options if o[0] not in recent and o[1] not in recent]
         if fresh:
-            lid, text = self.rng.choice(fresh)
+            # prefer answers that respond to meaning over ones that just quote them back
+            plain = [o for o in fresh if not o[2]]
+            pool = plain if plain and self.rng.random() < 0.7 else fresh
+            # lines that reflect the captured part of what they said ({x}) are the most on-point
+            slot = [o for o in pool if o[3]]
+            if slot and self.rng.random() < 0.65:
+                pool = slot
+            lid, text, echo, _ = self.rng.choice(pool)
         else:  # everything was used recently: take the oldest one
             order = {k: n for n, k in enumerate(recent)}
-            lid, text = min(options, key=lambda o: order.get(o[0], -1))
+            lid, text, echo, _ = min(options, key=lambda o: order.get(o[0], -1))
         if self.guard.hit(text, extra):
             return None
         recent.append(lid)
         del recent[: -self.NO_REPEAT]
+        if record:
+            h = u.setdefault("echo", [])
+            h.append(bool(echo))
+            del h[:-8]
         return text
 
     def remember_tweet(self, u, tweet):
@@ -455,6 +501,7 @@ class Brain:
             "fav": self.fav_word(u) or "",
             "count": str(u.get("roasts", 0)) if u.get("roasts", 0) >= 2 else "",
             "_last_topic": last_topic,
+            "_said": clean_text(text).lower().strip(" .!?,"),
         }
 
     def respond(self, gid, uid, name, text, *, directed=False, cfg=None, extra_block=()):
@@ -463,6 +510,7 @@ class Brain:
         u = self.store.user(gid, uid)
         intent, topic = classify(text, directed)
         ctx = self.context(u, name, text, topic, extra_block)
+        ctx["_tone"] = cfg.get("tone", "normal")
         reply = None
 
         if intent == "topic":

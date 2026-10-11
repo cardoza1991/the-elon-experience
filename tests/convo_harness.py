@@ -54,7 +54,8 @@ class Harness:
         self.log = []
         self.chat_on = True
 
-    def send(self, uid, name, text, *, mention=False, reply_to_bot=False, gap=6.0, channel=10, gid=1):
+    def send(self, uid, name, text, *, mention=False, reply_to_bot=False, gap=6.0, channel=10, gid=1,
+             other_target=False):
         """Mirror of bot.on_message reply logic. Returns the Reply or None."""
         self.clock.t += gap
         explicit = mention or reply_to_bot
@@ -63,7 +64,7 @@ class Harness:
         c = self.cfg
         r = None
         mode = self.convo.gate(gid, channel, uid, text, explicit=explicit, cfg=c, chat_on=self.chat_on,
-                               ignored=channel in c["ignore_channels"])
+                               ignored=channel in c["ignore_channels"], other_target=other_target and not explicit)
         if mode == "abuse":
             r = self.convo.reply(gid, channel, uid, name, text, cfg=c)
         elif mode == "abuse_oneshot":
@@ -118,6 +119,21 @@ def group(seed=3):
     return h
 
 
+def live_bug(seed=5):
+    """The 03:3x UTC session on Michael's server that came out doubled (now single replies)."""
+    h = Harness(seed)
+    n = "[DEAD] Batdaddy [DΞΛD]"
+    h.send(8, n, "Elon")
+    h.send(8, n, "bruh we are testing you")
+    h.send(8, n, "like can you be less offensive")
+    h.send(8, n, "your mom did")
+    h.send(8, n, "Yes I am and you are dumb")
+    h.send(8, n, "<@4242> Edwin your best friend is back", other_target=True)
+    h.send(8, n, "like just let this bot handle the rabble")
+    h.send(8, n, "stfu bot")
+    return h
+
+
 def abuser(seed=4):
     h = Harness(seed)
     n = "Dex"
@@ -132,7 +148,8 @@ def abuser(seed=4):
 
 if __name__ == "__main__":
     for title, fn in (("1. Michael's server regression", batdad), ("2. Facts, opinions, pronouns", mechanic),
-                      ("3. Group conversation", group), ("4. Abuse escalation", abuser)):
+                      ("3. Group conversation", group), ("4. Abuse escalation", abuser),
+                      ("5. Live bug replay (single replies)", live_bug)):
         print(f"=== {title} ===")
         print(fn().transcript())
         print()

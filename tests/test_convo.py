@@ -206,7 +206,7 @@ class TestRelevanceTranscripts(unittest.TestCase):
             with self.subTest(seed=seed):
                 h = mechanic(seed)
                 intents = [x[2].intent if x[2] else None for x in h.log]
-                self.assertIn(intents[0], ("greeting",))
+                self.assertIn(intents[0], ("greeting", "summon"))
                 self.assertEqual(intents[1], "fact_ack")
                 self.assertIn(intents[2], ("opinion", "opinion_tweet"))
                 self.assertIn(intents[3], ("answer_yes",))
