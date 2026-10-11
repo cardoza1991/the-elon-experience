@@ -17,6 +17,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 
 import brain
+import convo
 import moderation as mod
 from store import DEFAULT_CONFIG, Store
 
@@ -31,6 +32,7 @@ BRAIN = brain.Brain(store, TWEETS)
 SPAM = mod.SpamDetector()
 RAID = mod.RaidDetector()
 WARNS = mod.WarnBook(store)
+CONVO = convo.Conversations(BRAIN)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -303,18 +305,32 @@ async def on_message(message):
     g, author = message.guild, message.author
     c = cfg(g)
     text = message.content or ""
-    directed = bot.user in message.mentions or await replied_to_bot(message)
+    explicit = bot.user in message.mentions or await replied_to_bot(message)
     ch = message.channel
     parent = getattr(ch, "parent_id", None)
+    chans = {ch.id, parent} - {None}
+    chat_on = not (chans & set(c["chat_off_channels"]))
+    ignored = bool(chans & set(c["ignore_channels"]))
     reply = None
+    xb = c["blocklist_extra"]
     try:
-        if directed:
+        mode = CONVO.gate(g.id, ch.id, author.id, text, explicit=explicit, cfg=c, chat_on=chat_on, ignored=ignored)
+        if mode == "abuse":
+            reply = CONVO.reply(g.id, ch.id, author.id, name_of(author), text, cfg=c, extra_block=xb)
+        elif mode == "abuse_oneshot":
+            reply = CONVO.reply_abuse_oneshot(g.id, author.id, name_of(author), text, cfg=c, extra_block=xb)
+        elif mode == "convo":
+            if not explicit or BRAIN.allow_directed(g.id, author.id, c):
+                reply = CONVO.reply(g.id, ch.id, author.id, name_of(author), text, cfg=c, extra_block=xb)
+        elif mode == "oneshot":
             if BRAIN.allow_directed(g.id, author.id, c):
-                reply = BRAIN.respond(g.id, author.id, name_of(author), text, directed=True, cfg=c,
-                                      extra_block=c["blocklist_extra"])
-        elif BRAIN.should_jump(g.id, ch.id, author.id, text, c, parent):
-            reply = BRAIN.respond(g.id, author.id, name_of(author), text, directed=False, cfg=c,
-                                  extra_block=c["blocklist_extra"])
+                reply = BRAIN.respond(g.id, author.id, name_of(author), text, directed=True, cfg=c, extra_block=xb)
+        elif not CONVO.in_session(g.id, ch.id, author.id) and BRAIN.should_jump(g.id, ch.id, author.id, text, c, parent):
+            reply = BRAIN.respond(g.id, author.id, name_of(author), text, directed=False, cfg=c, extra_block=xb)
+            if chat_on:
+                CONVO.after_jump_in(g.id, ch.id, author.id, reply.text, c, text)
+    except Exception as e:
+        print(f"reply logic error: {type(e).__name__}: {e}")
     finally:
         BRAIN.observe(g.id, author.id, name_of(author), text, brain.detect_topic(brain.clean_text(text)))
 
@@ -326,7 +342,7 @@ async def on_message(message):
     try:
         async with ch.typing():
             await asyncio.sleep(min(3.5, 0.6 + len(reply.text) / 70 + random.random() * 0.9))
-        if directed or random.random() < 0.7:
+        if explicit or reply.intent not in ("generic",) or random.random() < 0.7:
             await message.reply(reply.text, mention_author=False)
         else:
             await ch.send(reply.text)
@@ -387,12 +403,14 @@ async def on_command_error(ctx, error):
 @bot.hybrid_command(name="help", description="Show every command")
 async def help_cmd(ctx):
     e = discord.Embed(title="The Elon Experience", color=COLOR,
-                      description="Roasts on mention/reply, ~8% random jump-ins, real Elon tweets when you talk Tesla/SpaceX/X/AI/money. "
-                                  "Every command works as `!cmd` or `/cmd`.")
+                      description="Mention or reply to me (or say 'elon'/'bot') to start a conversation; I'll keep talking "
+                                  "for a few minutes without needing more mentions. Say bye/gtg/gn to end it. Insult me and I escalate. ~8% random jump-ins, "
+                                  "real Elon tweets when you talk Tesla/SpaceX/X/AI/money. Every command works as `!cmd` or `/cmd`.")
     e.add_field(name="Fun", inline=False, value=(
         "`elon [topic]` real Elon tweet (aliases quote, tweet)\n"
         "`roast [@user]` targeted roast\n"
-        "`profile [@user]` what the bot remembers about you"))
+        "`profile [@user]` what the bot remembers about you\n"
+        "`chat on|off|status [#channel]` conversation mode per channel (Manage Channels)"))
     e.add_field(name="Moderation", inline=False, value=(
         "`timeout @user <10m|1h|2d> [reason]` (mute)\n"
         "`untimeout @user [reason]` (unmute)\n"
@@ -417,6 +435,8 @@ async def help_cmd(ctx):
         "`config links off|invites|all`\n"
         "`config badwords on|off|add|remove|list [word]`\n"
         "`config blocklist add|remove|list [word]` (words the bot never repeats)\n"
+        "`config convo <timeout_s> [max_partners] [per_minute] [busy_speakers]`\n"
+        "`config abuse on|off [half_life_s] [cooldown_s] [per_minute]`\n"
         "`config tweetthreshold <0.05-0.6>`"))
     e.set_footer(text="No AI was harmed in the making of this bot. It's all if-statements.")
     await say(ctx, embed=e, ephemeral=False)
@@ -729,6 +749,25 @@ async def lockdown_cmd(ctx, mode: Literal["on", "off"], *, reason: Optional[str]
                  [("Reason", reason or "-")])
 
 
+@bot.hybrid_command(name="chat", description="Conversation mode on/off for a channel")
+@app_commands.describe(mode="on, off or status", channel="Defaults to this channel")
+@app_commands.default_permissions(manage_channels=True)
+@commands.guild_only()
+@commands.has_permissions(manage_channels=True)
+async def chat_cmd(ctx, mode: Literal["on", "off", "status"] = "status", channel: Optional[discord.TextChannel] = None):
+    ch = channel or ctx.channel
+    c = cfg(ctx.guild)
+    off = list(c["chat_off_channels"])
+    if mode == "status":
+        state = "off" if ch.id in off else "on"
+        return await say(ctx, f"Conversation mode in {ch.mention}: **{state}** (sessions last {c['convo_timeout']}s). "
+                              f"Off in: {', '.join(f'<#{i}>' for i in off) or 'nowhere'}")
+    _toggle_list(ctx.guild.id, "chat_off_channels", ch.id, "add" if mode == "off" else "remove")
+    await say(ctx, f"💬 Conversation mode {mode} in {ch.mention}." +
+              (" Mentions still get one-shot roasts." if mode == "off" else ""), ephemeral=False)
+    await modlog(ctx.guild, "Config", f"{ctx.author.mention}: conversation mode {mode} in {ch.mention}", COLOR)
+
+
 # ======================================================================== config
 
 def _pct(x):
@@ -747,6 +786,12 @@ async def config_grp(ctx):
     e.add_field(name="Jump-in", value=f"{_pct(c['jump_rate'])} random, {_pct(c['topic_jump_rate'])} on Elon topics\n"
                                       f"cooldown {c['channel_cooldown']}s/channel, {c['user_cooldown']}s/user\n"
                                       f"tweet threshold {c['tweet_threshold']}", inline=False)
+    e.add_field(name="Conversations", value=f"{c['convo_timeout']}s sessions, {c['convo_max_partners']} partners/channel, "
+                                            f"{c['convo_per_min']} replies/min, busy at {c['convo_busy_speakers']} speakers\n"
+                                            f"off in: {chans(c['chat_off_channels'])}", inline=False)
+    e.add_field(name="Abuse retaliation", value=("on" if c["abuse_enabled"] else "off") +
+                f": half-life {c['abuse_half_life']}s, cooldown {c['abuse_cooldown']}s, {c['abuse_per_min']}/min per user",
+                inline=False)
     e.add_field(name="Ignore channels", value=chans(c["ignore_channels"]))
     e.add_field(name="Roast-only channels", value=chans(c["roast_channels"]) if c["roast_channels"] else "all")
     e.add_field(name="Mod-log", value=f"<#{c['modlog']}>" if c["modlog"] else "off (set with config modlog)")
@@ -919,6 +964,38 @@ async def cfg_blocklist(ctx, action: Literal["add", "remove", "list"], *, word: 
         except discord.HTTPException:
             pass
     await say(ctx, f"✅ Blocklist {action}ed.")
+
+
+@_cfgcmd("convo", "Conversation mode: session timeout (s), max partners, replies/min, busy threshold")
+async def cfg_convo(ctx, timeout_seconds: commands.Range[int, 30, 3600], max_partners: Optional[int] = None,
+                    per_minute: Optional[int] = None, busy_speakers: Optional[int] = None):
+    g = ctx.guild.id
+    store.set_cfg(g, "convo_timeout", timeout_seconds)
+    if max_partners is not None:
+        store.set_cfg(g, "convo_max_partners", max(1, min(20, max_partners)))
+    if per_minute is not None:
+        store.set_cfg(g, "convo_per_min", max(1, min(30, per_minute)))
+    if busy_speakers is not None:
+        store.set_cfg(g, "convo_busy_speakers", max(2, min(50, busy_speakers)))
+    c = cfg(ctx.guild)
+    await _saved(ctx, f"Conversations: {c['convo_timeout']}s timeout, {c['convo_max_partners']} partners/channel, "
+                      f"{c['convo_per_min']} replies/min, busy at {c['convo_busy_speakers']} speakers")
+
+
+@_cfgcmd("abuse", "Abuse retaliation: on/off, decay half-life (s), per-user cooldown (s), max fire-backs/min")
+async def cfg_abuse(ctx, mode: Literal["on", "off"], half_life: Optional[int] = None, cooldown: Optional[int] = None,
+                    per_minute: Optional[int] = None):
+    g = ctx.guild.id
+    store.set_cfg(g, "abuse_enabled", mode == "on")
+    if half_life is not None:
+        store.set_cfg(g, "abuse_half_life", max(30, min(3600, half_life)))
+    if cooldown is not None:
+        store.set_cfg(g, "abuse_cooldown", max(1, min(120, cooldown)))
+    if per_minute is not None:
+        store.set_cfg(g, "abuse_per_min", max(1, min(20, per_minute)))
+    c = cfg(ctx.guild)
+    await _saved(ctx, f"Abuse retaliation {mode}: half-life {c['abuse_half_life']}s, cooldown {c['abuse_cooldown']}s, "
+                      f"max {c['abuse_per_min']}/min per user")
 
 
 @_cfgcmd("tweetthreshold", "How relevant a tweet must be to auto-post (0.05 loose - 0.6 strict, default 0.15)")

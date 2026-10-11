@@ -325,13 +325,14 @@ class Brain:
     MAX_MSGS = 20
     NO_REPEAT = 30
 
-    def __init__(self, store, tweets=None, rng=None, clock=time.monotonic, guard=None):
+    def __init__(self, store, tweets=None, rng=None, clock=time.monotonic, guard=None, index=None):
         self.store = store
         self.rng = rng or random.Random()
         self.clock = clock
         self.tweets = list(tweets) if tweets else list(FALLBACK_TWEETS)
-        self.index = TweetIndex(self.tweets)
+        self.index = index or TweetIndex(self.tweets)
         self.guard = guard or SlurGuard()
+        self.banks = dict(L.ALL_BANKS)
         self.chan_cd = Cooldown(45, clock)
         self.user_cd = Cooldown(120, clock)
         self.mention_cd = Cooldown(3, clock)
@@ -378,7 +379,7 @@ class Brain:
             return None
 
     def pick(self, bank_name, ctx, u, extra=()):
-        bank = L.ALL_BANKS[bank_name]
+        bank = self.banks[bank_name]
         recent = u.setdefault("recent", [])
         options = []
         for i, line in enumerate(bank):
@@ -438,6 +439,9 @@ class Brain:
         return tw, False
 
     def context(self, u, name, text, topic=None, extra=()):
+        if name:  # 'King Batdad [DEAD]' -> 'King Batdad'
+            short = re.sub(r"\s*[\[\(\{<|].*?([\]\)\}>|]|$)\s*", " ", name).strip()
+            name = short if len(short) >= 2 else name
         name = name if name and not self.guard.hit(name, extra) else "bro"
         snip = snippet_of(text)
         if snip and (self.guard.hit(snip, extra) or len(snip) < 2):

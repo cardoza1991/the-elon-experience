@@ -22,6 +22,19 @@ DEFAULT_CONFIG = {
     "roast_channels": [],       # if non-empty, only jump in here
     "immune_roles": [],         # role ids immune to auto-mod
     "modlog": None,             # channel id for mod-log embeds
+    # --- conversation mode ---
+    "chat_off_channels": [],    # channels where conversation mode is off (mentions = one-shot roasts)
+    "convo_timeout": 240,       # seconds a conversation stays open after the last exchange
+    "convo_max_partners": 4,    # simultaneous conversation partners per channel
+    "convo_per_min": 8,         # max conversational replies per channel per minute (mentions exempt)
+    "convo_busy_speakers": 6,   # 6+ people talking in the last minute = busy: only answer when addressed
+    "convo_end_cooldown": 90,   # after 'bye/stfu', don't re-open implicitly for this long
+    "convo_followup_rate": 0.55,  # chance to add a follow-up question
+    # --- abuse retaliation ---
+    "abuse_enabled": True,      # insults aimed at the bot always get fired back at
+    "abuse_half_life": 180,     # seconds for a user's abuse level to halve
+    "abuse_cooldown": 4,        # min seconds between fire-backs at the same user
+    "abuse_per_min": 6,         # max fire-backs per user per minute
     # --- warns ---
     "warn_limit": 3,            # auto-timeout every N warns
     "warn_timeout": "1h",

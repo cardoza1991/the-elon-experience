@@ -1,0 +1,617 @@
+"""convo.py - multi-turn conversation mode. Still no AI: sessions + patterns + memory.
+
+Flow per human message in a guild channel:
+  gate()  -> decides whether the bot should answer (session rules, caps, cooldowns)
+  reply() -> builds the answer with the fallback chain:
+             end/crisis -> answer to the bot's own question -> jab/disbelief ->
+             specific pattern (with slot capture + reflection) -> topic/tweet ->
+             roast banks for insults/greetings/etc. -> contextual roast -> generic
+Both are pure python and testable without Discord (inject a clock and rng).
+"""
+import re
+import time
+from collections import deque
+
+import brain
+import convo_lines as C
+from brain import STOP, clean_text, content_terms, detect_topic, snippet_of, tokens
+
+# ------------------------------------------------------------------ reflection
+
+_REFLECT = {
+    "i": "you", "me": "you", "my": "your", "mine": "yours", "myself": "yourself", "am": "are",
+    "i'm": "you're", "im": "you're", "i've": "you've", "ive": "you've", "i'll": "you'll", "i'd": "you'd",
+    "you": "me", "u": "me", "your": "my", "ur": "my", "yours": "mine", "yourself": "myself",
+    "you're": "I'm", "youre": "I'm", "you've": "I've", "you'll": "I'll", "you'd": "I'd",
+    "we": "you", "us": "you", "our": "your", "was": "was", "were": "were",
+}
+_BIGRAMS = [(r"\byou are\b", "I am"), (r"\bu are\b", "I am"), (r"\bare you\b", "am I"),
+            (r"\byou were\b", "I was"), (r"\bi am\b", "you are"), (r"\bi was\b", "you were")]
+_TRAIL_FILLER = re.compile(r"(\s+(lol|lmao|lmfao|tho|though|bro|man|dude|haha+|fr|ngl|tbh|rn|honestly|lowkey))+$", re.I)
+PRONOUN_REFS = {"it", "that", "this", "them", "those", "that one", "this one", "him", "her", "these"}
+
+
+def reflect(fragment):
+    s = " " + fragment.strip() + " "
+    marks = {}
+    for i, (rx, rep) in enumerate(_BIGRAMS):
+        key = f"\x00{i}\x00"
+        s = re.sub(rx, key, s, flags=re.I)
+        marks[key] = rep
+    out = []
+    for w in s.split():
+        if w in marks:
+            out.append(marks[w])
+            continue
+        low = w.lower()
+        out.append(_REFLECT.get(low, w))
+    return " ".join(out)
+
+
+def clean_slot(x, max_words=8, max_len=50):
+    x = re.sub(r"[\s.!?,;:~]+$", "", x.strip())
+    x = _TRAIL_FILLER.sub("", x).strip(" .!?,;:")
+    x = x.replace('"', "'").replace("`", "'")
+    words = x.split()
+    if len(words) > max_words:
+        x = " ".join(words[:max_words]) + "..."
+    if len(x) > max_len:
+        x = x[:max_len].rsplit(" ", 1)[0] + "..."
+    return x.strip()
+
+
+# ------------------------------------------------------------------ patterns
+
+def _rx(p):
+    return re.compile(p, re.I)
+
+
+END_START_RE = _rx(r"^\W*((ok|okay|alright|aight|well|anyway|k)[\s,.!]+)?(bye+|goodbye|gtg|g2g|got ?ta go|gotta go|i gotta go|i(?:'| a)?m out|i'?m off|"
+                   r"later|laters|cya|see ya|see you|gn|good ?night|peace( out)?|night|ok bye|alright bye|ttyl|"
+                   r"leave me alone|go away|stop talking|be quiet|i'?m done|done talking)\b")
+END_ANY_RE = _rx(r"\b(leave me alone|stop talking to me|stop replying|i'?m done (with|talking to) (you|u)|gtg|gotta go)\b")
+# ---- abuse aimed at the bot (fires back instead of ending) ----
+PROFANITY_RE = _rx(r"\b(fuck\w*|f+u+|stfu|gtfo|shit\w*|bitch\w*|dick\w*|cunt\w*|ass(hole|hat|wipe)|(your|ur|my) ass|dumbass|jackass|"
+                   r"bastard|prick|twat|wanker|douche\w*|motherfuck\w*|piss off|screw (you|u|off)|suck my|eat shit|"
+                   r"shut (the fuck |tf )?up|bozo|loser|idiot|moron|stupid|dumb|trash|garbage|useless|clown|clanker|"
+                   r"pathetic|cringe|lame|worthless|annoying|ugly|suck|sucks|hate (you|u|this))\b")
+BENIGN_RE = _rx(r"\b(fuck (yeah|yes|yea|ya)|hell yeah|holy shit|no shit|good shit|the shit|shit'?s (fire|crazy|wild|funny)|"
+                r"fucking (funny|hilarious|great|right|true)|so fucking (funny|good))\b")
+THIRD_PARTY_RE = _rx(r"\b(my|his|her|their|he|she|they|him|them|that guy|this guy|boss|mom|dad|teacher|team)\b")
+INSULT_WORD_RE = _rx(r"\b(trash|garbage|useless|clown|clanker|bozo|loser|idiot|moron|stupid|dumb|pathetic|cringe|lame|"
+                     r"worthless|annoying|ugly|bitch|dickhead|dick|asshole|dumbass|jackass|bastard|prick|twat|wanker|"
+                     r"douche(bag)?|cunt|mid|boring|dogshit|shit bot|bad bot|npc|joke)\b")
+AIM_RE = _rx(r"\b(you|u|ur|your|you'?re|youre|yourself|ya|bot|elon|clanker|this thing)\b")
+STFU_RE = _rx(r"\b(stfu|gtfo|shut (the fuck |tf )?up|fuck (you|u|off|this bot)|f+ ?u+|piss off|eat shit|screw (you|u)|"
+              r"suck my|kiss my ass)\b")
+CRISIS_RE = _rx(r"\b(kill myself|killing myself|suicid\w*|want to die|wanna die|end it all|end my life|self[- ]harm|"
+                r"cut myself|don'?t want to (live|be alive))\b")
+YES_RE = _rx(r"^\W*(yes+|yeah+|yea+|yep|yup|ya|ye|sure|of course|obviously|definitely|absolutely|100( ?%)?|i do|i am|"
+             r"i did|true|correct|affirmative|hell yeah|ofc|duh)\b")
+NO_RE = _rx(r"^\W*(no+|nah+|nope|never|not really|i don'?t|i do not|hell no|negative|absolutely not|no chance)\b")
+MAYBE_RE = _rx(r"^\W*(maybe|idk|i don'?t know|kinda|sort of|kind of|perhaps|not sure|dunno|possibly|eh)\b")
+DISBELIEF_RE = _rx(r"^\W*(no way|no shot|nah no way|bro what|bruh+|really|deadass|you serious|are you serious|"
+                   r"seriously|wow+|damn+|sheesh|wait what|excuse me|ayo+|how dare you|rude|oof|bro+|omg|"
+                   r"you did not|u did not|ouch|that'?s crazy|crazy)\W*(lol|lmao|bro|dude)?\W*$")
+JAB_RE = _rx(r"(not much of a (conversationalist|talker|convo)|conversationalist|(you|u|this bot|the bot|it) "
+             r"(can'?t|cant|don'?t|doesn'?t) (talk|hold a conversation|chat|converse)|\bboring\b|"
+             r"that'?s all (you|u) (got|have)|is that all (you|u)|you'?re not (even )?funny|not funny|"
+             r"(you|u) only (say|know) (one|the same)|repetitive|say something (else|real|new|smart)|"
+             r"\bweak( roast| ass)?\b|that was weak|try harder|mid roast|dry (ass )?(bot|convo|conversation)|"
+             r"(you|u) suck at (talking|this|conversations?)|(you|u)'?re? (so )?dry)")
+CONFUSED_RE = _rx(r"^\W*(what+|huh+|wdym|what do (you|u) mean|eh|come again|say what|wym|explain)\W*$")
+NAME_RE = _rx(r"\b(elon|bot|clanker|elon ?experience|the elon experience)\b")
+BOT_NAME_WORDS = {"elon", "bot", "clanker", "experience", "musk"}
+_LEAD_FILLER = re.compile(r"^(even|really|actually|just|ever|like,|literally|honestly|still)\s+", re.I)
+SUBJECT_KEYS = {"opinion", "i_like", "i_hate", "my_x", "what_is", "i_want", "i_think", "should_i", "i_feel"}
+ADDRESS_RE = _rx(r"\b(you|u|ur|your|yours|you'?re|youre|yourself|elon|bot)\b|\?\s*$")
+SENSITIVE_RE = _rx(r"\b(gay|lesbian|bi|bisexual|trans|transgender|queer|nonbinary|non-binary|asexual|black|white|asian|"
+                   r"latino|latina|hispanic|mexican|jewish|jew|muslim|christian|catholic|hindu|atheist|buddhist|sikh|"
+                   r"disabled|autistic|autism|adhd|deaf|blind|immigrant|arab|indian|african|native american|"
+                   r"pregnant|religious)\b")
+VOCATIVE_RE = _rx(r"^\W*((yo|hey|ok|okay|so|well|bro|dude|man|elon|bot|clanker|lol|lmao|ayo|bruh)[\s,!.:]+)+")
+
+PATTERNS = [
+    ("joke", _rx(r"\b(tell|give|got|know|say|hit me with)\b.{0,20}\bjokes?\b|^jokes?\W*$|make me laugh|say something funny")),
+    ("who_are_you", _rx(r"\bwho (are|r) (you|u)\b|^what are (you|u)\W*$|\bintroduce yourself\b|\bwho made (you|u)\b")),
+    ("what_can_you_do", _rx(r"\bwhat (can|do) (you|u) do\b|\bwhat are your (commands|features)\b|\bhow do i use (you|u)\b")),
+    ("are_you_real", _rx(r"\b(are|r) (you|u) (a |an )?(real|bot|human|ai|alive|sentient|person|chatgpt|gpt|grok|robot|conscious)\b")),
+    ("how_are_you", _rx(r"\bhow (are|r) (you|u|ya)\b|\bhow'?s it going\b|\bhow (you|u) doing\b|\bhru\b|"
+                        r"\bhow (have|has) (you|u) been\b|^(you|u) good\W*$|\bhow'?s your day\b")),
+    ("wyd", _rx(r"\bwyd\b|\bwhat (are|r) (you|u) (doing|up to)\b|\bwhat(cha| you| u) (doing|up to)\b|^what'?s good\W*$|\bwhat'?s up\W*$")),
+    ("what_about_you", _rx(r"^(what|how) about (you|u|yourself)\b|^and (you|u)\W*$|^(you|u)\?+$|\b(wbu|hbu)\b")),
+    ("opinion", _rx(r"\b(what do (you|u) think|what'?s your (take|opinion|view)|thoughts|opinions?|how do (you|u) feel|"
+                    r"your take|what do (you|u) reckon)\s+(about|of|on)\s+(?P<x>.+)")),
+    ("opinion", _rx(r"^(is|are) (?P<x>.+?) (good|bad|overrated|underrated|worth it|dead|real|cool|mid|trash|"
+                    r"the future|a scam|legit)\W*$")),
+    ("should_i", _rx(r"\bshould i (?P<x>.+)")),
+    ("can_you", _rx(r"^(can|could|will|would) (you|u) (?P<x>.+)")),
+    ("do_you", _rx(r"^(do|did) (you|u) (?P<x>.+)")),
+    ("are_you", _rx(r"^(are|r) (you|u) (?P<x>.+)")),
+    ("you_are", _rx(r"^(you are|you'?re|youre|ur|u r|u are|you is) (?P<x>.+)")),
+    ("what_is", _rx(r"^(what|who)(?: is|'s| are|s) (?P<x>(?!up\b|good\b|going on\b|happening\b|wrong\b|new\b).+)")),
+    ("why", _rx(r"^why (?P<x>.+)")),
+    ("because", _rx(r"^(because|cuz|cause|bc|coz|since) (?P<x>.+)")),
+    ("fact_name", _rx(r"\b(my name is|my name'?s|call me) (?P<x>[a-z0-9][\w'-]{1,20})\W*$")),
+    ("fact_place", _rx(r"\bi (live|stay|am from|'?m from) (in )?(?P<x>[a-z][\w ,.'-]{1,30})\W*$")),
+    ("fact_job", _rx(r"\bi (work as|am working as|work for|work at) (an? |the )?(?P<x>[a-z][\w &'-]{1,30})\W*$")),
+    ("fact_iam", _rx(r"^i(?: am|'?m| m) (an? )(?P<x>[a-z][\w '-]{1,30})\W*$")),
+    ("i_feel", _rx(r"\bi (?:feel|am feeling|'?m feeling|m feeling) (?P<x>.+)")),
+    ("i_think", _rx(r"\bi (?:think|believe|reckon|feel like|bet) (?P<x>.+)")),
+    ("i_am", _rx(r"^i(?: am|'?m| m) (?P<x>.+)")),
+    ("i_want", _rx(r"\bi (?:want|wanna|need|wish|would like|'?d like) (?P<x>.+)")),
+    ("i_like", _rx(r"\bi (?:like|love|enjoy|adore|really like|really love) (?P<x>.+)")),
+    ("i_hate", _rx(r"\bi (?:hate|can'?t stand|despise|dislike|really hate) (?P<x>.+)")),
+    ("i_cant", _rx(r"\bi (?:can'?t|cannot|couldn'?t|cant) (?P<x>.+)")),
+    ("my_x", _rx(r"^my (?P<x>[\w'-]+(?: [\w'-]+)?)\b")),
+    ("thanks", _rx(r"^\W*(thanks|thank (you|u)|ty|thx|tysm|appreciate (it|you|u))\b")),
+    ("sorry", _rx(r"^\W*(sorry|my bad|apologies|my apologies|mb)\b")),
+    ("agree", _rx(r"^\W*(true|facts|exactly|you'?re right|ur right|u right|agreed|so true|fr fr|real|valid|fair( enough)?)\W*$")),
+    ("disagree", _rx(r"(you'?re wrong|ur wrong|u wrong|^no u\b|not true|that'?s wrong|^cap\b|that'?s cap|^wrong\b|^false\b|"
+                     r"that'?s not true|you'?re lying|liar)")),
+]
+SLOT_KEYS = {"opinion", "should_i", "can_you", "do_you", "are_you", "you_are", "what_is", "why", "because",
+             "i_feel", "i_think", "i_am", "i_want", "i_like", "i_hate", "i_cant", "my_x",
+             "fact_name", "fact_place", "fact_job", "fact_iam"}
+REFLECTED = SLOT_KEYS - {"fact_name", "fact_place", "fact_job", "fact_iam", "my_x"}
+SENSITIVE_SLOTS = {"i_am", "you_are", "are_you", "fact_iam", "do_you"}
+QUESTION_START = re.compile(r"^(do|does|did|are|is|was|were|have|has|can|could|would|will|should|you|u|got|want|wanna|ever|"
+                            r"am i|any)\b", re.I)
+
+
+class Session:
+    __slots__ = ("uid", "opened", "last_ts", "expires", "turns", "last_bot_line", "last_intent", "asked",
+                 "asked_q", "subject", "topic", "opener", "last_seq")
+
+    def __init__(self, uid, now, timeout, opener=""):
+        self.uid, self.opened, self.last_ts = uid, now, now
+        self.expires = now + timeout
+        self.turns = 0
+        self.last_bot_line = ""
+        self.last_intent = None
+        self.asked = None        # None | 'yesno' | 'open'
+        self.asked_q = ""
+        self.subject = ""
+        self.topic = None
+        self.opener = opener
+        self.last_seq = 0
+
+
+class Channel:
+    def __init__(self):
+        self.seq = 0
+        self.recent = deque()     # (t, seq, uid)
+        self.bot_times = deque()  # times the bot replied in conversation mode
+        self.sessions = {}
+        self.ended = {}
+
+
+class Conversations:
+    def __init__(self, brain_obj, clock=time.monotonic):
+        self.brain = brain_obj
+        self.clock = clock
+        self.rng = brain_obj.rng
+        self.channels = {}
+        self.abuse = {}        # (gid, uid) -> (level, ts)   decays with abuse_half_life
+        self.abuse_times = {}  # (gid, uid) -> deque of reply times (rate limit)
+        self.abuse_hits = {}   # (gid, uid) -> (count in current streak, ts)
+        self.brain.banks.update(C.BANKS)
+        self.brain.banks["followup_q"] = [q for q in C.FOLLOWUPS if q.rstrip().endswith("?")]
+        for tier in (1, 2, 3):
+            self.brain.banks[f"abuse_{tier}_ref"] = [
+                ln for ln in C.BANKS[f"abuse_{tier}"] if "{snippet}" in ln or "{insult}" in ln]
+
+    # -------------------------------------------------------------- state
+    def chan(self, gid, cid):
+        return self.channels.setdefault((gid, cid), Channel())
+
+    def session(self, gid, cid, uid):
+        st = self.channels.get((gid, cid))
+        if not st:
+            return None
+        s = st.sessions.get(uid)
+        if s and self.clock() > s.expires:
+            del st.sessions[uid]
+            return None
+        return s
+
+    def in_session(self, gid, cid, uid):
+        return self.session(gid, cid, uid) is not None
+
+    def _prune(self, st, now):
+        while st.recent and now - st.recent[0][0] > 120:
+            st.recent.popleft()
+        while st.bot_times and now - st.bot_times[0] > 60:
+            st.bot_times.popleft()
+        for uid in [u for u, s in st.sessions.items() if now > s.expires]:
+            del st.sessions[uid]
+
+    def _open(self, st, uid, now, cfg, text):
+        s = st.sessions.get(uid)
+        timeout = cfg.get("convo_timeout", 240)
+        if s is None:
+            cap = max(1, cfg.get("convo_max_partners", 4))
+            while len(st.sessions) >= cap:
+                oldest = min(st.sessions.values(), key=lambda x: x.last_ts)
+                del st.sessions[oldest.uid]
+            s = Session(uid, now, timeout, snippet_of(text, 40))
+            st.sessions[uid] = s
+        s.expires = now + timeout
+        st.ended.pop(uid, None)
+        return s
+
+    # -------------------------------------------------------------- abuse
+    def is_abuse(self, text, in_context=False, cfg=None):
+        """Insults/profanity aimed at the bot. in_context = explicit mention/reply or an open session."""
+        if cfg is not None and not cfg.get("abuse_enabled", True):
+            return False
+        t = clean_text(text)
+        if not t or not PROFANITY_RE.search(t):
+            return False
+        if (brain.PRAISE_RE.search(t) or BENIGN_RE.search(t)) and not brain.INSULT_RE.search(t) and not STFU_RE.search(t):
+            return False  # 'this bot is fucking hilarious', 'fuck yeah you're right'
+        if STFU_RE.search(t) and (in_context or AIM_RE.search(t) or NAME_RE.search(t)):
+            return True
+        if NAME_RE.search(t) or (in_context and AIM_RE.search(t)):
+            return True
+        # short 'trash.' / 'lame af' right after a bot line (but not 'my boss is a clown')
+        return in_context and len(tokens(t)) <= 3 and not THIRD_PARTY_RE.search(t)
+
+    def abuse_level(self, key, cfg, now=None):
+        now = self.clock() if now is None else now
+        lvl, ts = self.abuse.get(key, (0.0, now))
+        half = max(1, cfg.get("abuse_half_life", 180))
+        return lvl * 0.5 ** ((now - ts) / half)
+
+    def abuse_tier(self, level):
+        return 1 if level < 1.8 else 2 if level < 3.5 else 3
+
+    def abuse_allowed(self, key, cfg):
+        """Small per-user limit so the bot can't be baited into flooding / rate limits."""
+        now = self.clock()
+        q = self.abuse_times.setdefault(key, deque())
+        while q and now - q[0] > 60:
+            q.popleft()
+        if q and now - q[-1] < cfg.get("abuse_cooldown", 4):
+            return False
+        return len(q) < cfg.get("abuse_per_min", 6)
+
+    def abuse_reply(self, gid, uid, name, text, cfg, extra=(), s=None):
+        now = self.clock()
+        key = (gid, uid)
+        level = self.abuse_level(key, cfg, now) + 1.0
+        self.abuse[key] = (level, now)
+        self.abuse_times.setdefault(key, deque()).append(now)
+        hits = self.abuse_hits.get(key, (0, now))
+        hits = (hits[0] + 1 if now - hits[1] < cfg.get("abuse_half_life", 180) * 3 else 1, now)
+        self.abuse_hits[key] = hits
+        tier = self.abuse_tier(level)
+        u = self.brain.store.user(gid, uid)
+        u["abuse_total"] = u.get("abuse_total", 0) + 1
+        t = clean_text(text)
+        m = INSULT_WORD_RE.search(t)
+        insult = m.group(0).lower() if m else ""  # only nouns/adjectives, never 'stfu' or 'fuck'
+        if self.brain.guard.hit(insult, extra):
+            insult = ""
+        ctx = self._ctx(s or Session(uid, now, 0), u, name, t, extra)
+        ctx.update(insult=insult, hits=str(hits[0]), hits1=str(hits[0] + 1))
+        line = None
+        if self.rng.random() < 0.65:  # prefer lines that quote what they said
+            line = self.brain.pick(f"abuse_{tier}_ref", ctx, u, extra)
+        if not line:
+            line = self.brain.pick(f"abuse_{tier}", ctx, u, extra)
+        if not line:  # e.g. snippet blocked by the guard: drop the quoting lines
+            line = self.brain.pick(f"abuse_{tier}", dict(ctx, snippet="", insult=""), u, extra)
+        if not line:
+            line = self.brain.pick("insult_bot", dict(ctx, snippet=""), u, extra) or "Sit down."
+        if tier >= 2 and not line.rstrip().endswith("?") and self.rng.random() < 0.5:
+            tag = self.brain.pick("abuse_tag", ctx, u, extra)
+            if tag:
+                line = f"{line} {tag}"
+        if self.brain.guard.hit(line, extra):
+            line = "Sit the fuck down. Next."
+        line = line[0].upper() + line[1:]
+        self.brain.store.mark_dirty()
+        return brain.Reply(f"abuse_{tier}", line, "line", None, round(level, 2))
+
+    def after_jump_in(self, gid, cid, uid, bot_line, cfg=None, text=""):
+        """The bot jumped in on someone unprompted: open a session so their comeback gets answered."""
+        cfg = cfg or {}
+        now = self.clock()
+        st = self.chan(gid, cid)
+        if now - st.ended.get(uid, -1e9) < cfg.get("convo_end_cooldown", 90):
+            return
+        s = self._open(st, uid, now, cfg, text)
+        s.last_bot_line, s.last_ts, s.last_seq = bot_line, now, st.seq
+        s.asked = ("yesno" if QUESTION_START.match(bot_line.split("?")[0].split(".")[-1].strip()) else "open") \
+            if bot_line.rstrip().endswith("?") else None
+        st.bot_times.append(now)
+
+    def end(self, gid, cid, uid):
+        st = self.chan(gid, cid)
+        st.sessions.pop(uid, None)
+        st.ended[uid] = self.clock()
+
+    # -------------------------------------------------------------- gate
+    def gate(self, gid, cid, uid, text, *, explicit=False, cfg=None, chat_on=True, ignored=False):
+        """Return 'convo', 'oneshot' or None. Call for EVERY human message (tracks channel activity)."""
+        cfg = cfg or {}
+        now = self.clock()
+        st = self.chan(gid, cid)
+        st.seq += 1
+        st.recent.append((now, st.seq, uid))
+        self._prune(st, now)
+        t = clean_text(text)
+        if not chat_on:
+            if explicit and self.is_abuse(t, in_context=True, cfg=cfg) and self.abuse_allowed((gid, uid), cfg):
+                return "abuse_oneshot"
+            return "oneshot" if explicit else None
+        s0 = st.sessions.get(uid)
+        if self.is_abuse(t, in_context=explicit or s0 is not None, cfg=cfg) and not (ignored and not explicit and not s0):
+            if not self.abuse_allowed((gid, uid), cfg):
+                return None
+            self._open(st, uid, now, cfg, t)
+            return "abuse"
+        if explicit:
+            self._open(st, uid, now, cfg, t)
+            return "convo"
+        if now - st.ended.get(uid, -1e9) < cfg.get("convo_end_cooldown", 90):
+            return None
+        capped = len(st.bot_times) >= cfg.get("convo_per_min", 8)
+        speakers = {u for (ts, _, u) in st.recent if now - ts <= 60}
+        busy = len(speakers) >= cfg.get("convo_busy_speakers", 6)
+        s = st.sessions.get(uid)
+        named = bool(NAME_RE.search(t))
+        if named and not ignored and not capped:
+            self._open(st, uid, now, cfg, t)
+            return "convo"
+        if s is None:
+            return None
+        if now - s.last_ts < 1.2:  # they double-texted faster than we can type
+            return None
+        others = any(u != uid and seq > s.last_seq for (_, seq, u) in st.recent)
+        # a quiet 1:1 conversation is never rate-capped (anti-spam still covers floods)
+        if capped and (others or busy):
+            return None
+        addressed = (bool(ADDRESS_RE.search(t)) or bool(END_START_RE.search(t) or END_ANY_RE.search(t))
+                     or bool(JAB_RE.search(t)) or (s.asked is not None and len(tokens(t)) <= 12))
+        if (busy or others) and not addressed:
+            return None
+        return "convo"
+
+    # -------------------------------------------------------------- reply
+    def _kw(self, text, extra=()):
+        idf = self.brain.index.idf
+        top = max(idf.values()) if idf else 1.0
+        best, score = None, 0.0
+        for w in tokens(text):
+            if w in STOP or len(w) < 3 or w.isdigit() or w in BOT_NAME_WORDS:
+                continue
+            if self.brain.guard.hit(w, extra) or SENSITIVE_RE.search(w):
+                continue
+            sc = idf.get(brain.stem(w), top) + len(w) * 0.05
+            if sc > score:
+                best, score = w, sc
+        return best or ""
+
+    def _facts(self, u):
+        return u.setdefault("facts", {})
+
+    def _ctx(self, s, u, name, text, extra):
+        ctx = self.brain.context(u, name, text, None, extra)
+        f = self._facts(u)
+        nick = f.get("nick")
+        if nick and not self.brain.guard.hit(nick, extra):
+            ctx["name"] = nick
+        likes = f.get("likes") or []
+        ctx.update({
+            "x": "", "kw": self._kw(text, extra), "subject": s.subject or (s.topic or ""),
+            "last": snippet_of(s.last_bot_line, 70), "opener": s.opener if s.turns else "",
+            "iam": f.get("iam", ""), "job": f.get("job", ""), "place": f.get("place", ""),
+            "likes": likes[-1] if likes else "", "nick": nick or "", "tweet": "",
+        })
+        return ctx
+
+    def _pick(self, bank, ctx, u, extra):
+        return self.brain.pick(bank, ctx, u, extra)
+
+    def _match(self, text):
+        t = VOCATIVE_RE.sub("", text).strip()
+        for key, rx in PATTERNS:
+            m = rx.search(t)
+            if m:
+                x = ""
+                if "x" in rx.groupindex:
+                    x = m.group("x") or ""
+                return key, x, t
+        return None, "", t
+
+    def reply(self, gid, cid, uid, name, text, *, cfg=None, extra_block=()):
+        cfg = cfg or {}
+        now = self.clock()
+        st = self.chan(gid, cid)
+        s = st.sessions.get(uid) or self._open(st, uid, now, cfg, text)
+        u = self.brain.store.user(gid, uid)
+        t = clean_text(text)
+        ctx = self._ctx(s, u, name, t, extra_block)
+        topic = detect_topic(t)
+        out, key, kind, score, ending, allow_follow = None, None, "line", None, False, True
+
+        # 1. leaving / crisis
+        if CRISIS_RE.search(t):
+            key, out, allow_follow = "crisis", C.CRISIS[0].format(name=ctx["name"]), False
+        elif self.is_abuse(t, in_context=True, cfg=cfg):
+            r = self.abuse_reply(gid, uid, name, t, cfg, extra_block, s)
+            key, out, score, allow_follow = r.intent, r.text, r.score, False
+        elif END_START_RE.search(t) or END_ANY_RE.search(t):
+            key, ending, allow_follow = "end_convo", True, False
+            out = self._pick("end_convo", ctx, u, extra_block)
+
+        # 2. answers to the bot's own question (bare yes/no also reacts to its last line)
+        bare = len(tokens(t)) <= 3
+        if out is None and (s.asked == "yesno" or (s.last_bot_line and bare)):
+            if DISBELIEF_RE.search(t) and not re.match(r"^\W*no+\W*$", t, re.I):
+                pass  # 'no way' etc. reads as disbelief, handled below
+            elif YES_RE.search(t) and not (re.match(r"^\W*i (am|do|did)\b", t, re.I) and len(tokens(t)) > 2):
+                key = "answer_yes"
+            elif NO_RE.search(t):
+                key = "answer_no"
+            elif MAYBE_RE.search(t):
+                key = "answer_maybe"
+            if key:
+                out = self._pick(key, ctx, u, extra_block)
+
+        # 3. jabs at the bot / disbelief at the last roast
+        if out is None and JAB_RE.search(t):
+            key = "jab"
+            out = self._pick("jab", ctx, u, extra_block)
+        if out is None and s.last_bot_line and DISBELIEF_RE.search(t):
+            key = "disbelief"
+            out = self._pick("disbelief", ctx, u, extra_block)
+
+        # 4. specific patterns with slot capture
+        if out is None:
+            pkey, raw, stripped = self._match(t)
+            if pkey:
+                x = clean_slot(reflect(raw) if pkey in REFLECTED else raw)
+                x = _LEAD_FILLER.sub("", x)
+                ref = s.subject or s.topic
+                if ref and x.lower() in PRONOUN_REFS:
+                    x = ref
+                elif ref and x.split(" ", 1)[0].lower() in ("it", "that", "this") and " " in x:
+                    x = ref + " " + x.split(" ", 1)[1]  # 'it looks like a fridge' -> 'the cybertruck looks...'
+                    x = re.sub(r"^(.+?) (is|was)\b", r"\1 \2", x)
+                if x and self.brain.guard.hit(x, extra_block):
+                    x = ""
+                sensitive = bool(x and SENSITIVE_RE.search(x)) and pkey in SENSITIVE_SLOTS
+                if sensitive:
+                    key, out = "sensitive_ack", self._pick("sensitive_ack", ctx, u, extra_block)
+                elif pkey == "you_are" and brain.INSULT_RE.search(raw):
+                    key, out = "insult_bot", self._pick("insult_bot", ctx, u, extra_block)
+                elif pkey.startswith("fact_") and x:
+                    out, key = self._fact(pkey, x, ctx, u, extra_block)
+                    if out is None and pkey == "fact_iam":
+                        pkey = "i_am"
+                if out is None and not pkey.startswith("fact_") and not sensitive:
+                    if pkey in SLOT_KEYS and not x:
+                        pkey = None
+                    elif pkey == "opinion":
+                        tp = detect_topic(x)
+                        hit = self.brain.match_tweet(x, tp, cfg.get("tweet_threshold", 0.15), u) if tp else None
+                        if hit and not self.brain.guard.hit(hit[1], extra_block) and self.rng.random() < 0.65:
+                            self.brain.remember_tweet(u, hit[1])
+                            out = self._pick("opinion_tweet", dict(ctx, x=x, tweet=hit[1]), u, extra_block)
+                            key, score = "opinion_tweet", hit[0]
+                    if pkey == "i_like" and x and not SENSITIVE_RE.search(x):
+                        self.note_like(u, x)
+                    if pkey and out is None:
+                        key = pkey
+                        out = self._pick(pkey, dict(ctx, x=x), u, extra_block)
+                if x and not sensitive and pkey in SUBJECT_KEYS:
+                    s.subject = x if pkey not in ("i_think", "i_feel", "should_i") or not s.subject else s.subject
+
+        # 5. open question we asked earlier -> treat as their answer
+        intent, _ = brain.classify(t, True)
+        if out is None and s.asked == "open" and intent in ("generic", "low_effort", "question"):
+            key = "answer_open"
+            out = self._pick("answer_open", ctx, u, extra_block)
+
+        # 6. topic -> relevant tweet or topic roast
+        if out is None and intent == "topic":
+            hit = self.brain.match_tweet(t, topic, cfg.get("tweet_threshold", 0.15), u)
+            if hit and not self.brain.guard.hit(hit[1], extra_block):
+                self.brain.remember_tweet(u, hit[1])
+                key, out, kind, score = "topic", hit[1], "tweet", hit[0]
+            else:
+                key, out = "topic", self._pick("topic", dict(ctx, topic=topic), u, extra_block)
+            s.topic = topic
+            s.subject = s.subject if s.subject and s.subject.lower() in t.lower() else topic
+
+        # 7. roast banks for the classic intents
+        if out is None and intent in ("insult_bot", "spam_test", "praise_bot", "greeting", "farewell", "laugh", "question"):
+            if intent == "farewell":
+                ending, allow_follow = True, False
+                key, out = "end_convo", self._pick("end_convo", ctx, u, extra_block)
+            else:
+                key, out = intent, self._pick(intent, ctx, u, extra_block)
+
+        # 8. contextual roast that references what they said (sometimes a fact callback)
+        if out is None:
+            if (ctx["iam"] or ctx["place"] or ctx["likes"]) and self.rng.random() < 0.25:
+                line = self._pick("fact_callback", ctx, u, extra_block)
+                if line:
+                    key, out = "fact_callback", line
+            if out is None and (ctx["kw"] or ctx["snippet"]) and self.rng.random() < 0.8:
+                key, out = "contextual", self._pick("contextual", ctx, u, extra_block)
+            if out is None:
+                key, out = "generic", self._pick("generic", ctx, u, extra_block)
+            if ctx["kw"] and not s.subject:
+                s.subject = ctx["kw"]
+        if not out:
+            key, out = "generic", "Okay but counterpoint: no."
+
+        # follow-up question keeps the conversation going
+        force = key in ("jab",)
+        if allow_follow and kind == "line" and not out.rstrip().endswith("?"):
+            if force or self.rng.random() < cfg.get("convo_followup_rate", 0.55):
+                fctx = dict(ctx, subject=s.subject or s.topic or "")
+                f = self._pick("followup_q" if force else "followup", fctx, u, extra_block)
+                if f:
+                    out = f"{out} {f}"
+        elif kind == "tweet" and allow_follow and self.rng.random() < 0.4:
+            f = self._pick("followup", dict(ctx, subject=s.subject or s.topic or ""), u, extra_block)
+            if f:
+                out = f"{out}\n{f}"
+
+        if self.brain.guard.hit(out, extra_block):
+            key, out = "generic", "Okay but counterpoint: no. What else you got?"
+        if kind == "line" and out[:1].islower():
+            out = out[0].upper() + out[1:]
+
+        # update dialogue state
+        last_sentence = re.split(r"(?<=[.!?])\s+|\n", out.strip())[-1]
+        if last_sentence.endswith("?"):
+            s.asked = "yesno" if QUESTION_START.match(last_sentence) else "open"
+            s.asked_q = last_sentence
+        else:
+            s.asked, s.asked_q = None, ""
+        s.last_bot_line, s.last_intent = out, key
+        s.turns += 1
+        s.last_ts = now
+        s.last_seq = st.seq
+        s.expires = now + cfg.get("convo_timeout", 240)
+        st.bot_times.append(now)
+        u["roasts"] = u.get("roasts", 0) + 1
+        self.brain.store.mark_dirty()
+        if ending:
+            self.end(gid, cid, uid)
+        return brain.Reply(key, out, kind, topic, score)
+
+    def reply_abuse_oneshot(self, gid, uid, name, text, cfg=None, extra_block=()):
+        return self.abuse_reply(gid, uid, name, text, cfg or {}, extra_block)
+
+    def _fact(self, pkey, x, ctx, u, extra):
+        f = self._facts(u)
+        if pkey == "fact_name":
+            nick = x.strip()[:20]
+            if self.brain.guard.hit(nick, extra) or SENSITIVE_RE.search(nick):
+                return None, None
+            f["nick"] = nick
+            return self._pick("fact_name", dict(ctx, nick=nick), u, extra), "fact_name"
+        if pkey == "fact_place":
+            f["place"] = x
+            return self._pick("fact_place", dict(ctx, place=x), u, extra), "fact_place"
+        if pkey in ("fact_job", "fact_iam"):
+            if brain.INSULT_RE.search(x) or len(x.split()) > 4:
+                return None, None
+            f["iam"] = x
+            if pkey == "fact_job":
+                f["job"] = x
+            return self._pick("fact_ack", dict(ctx, iam=x), u, extra), "fact_ack"
+        return None, None
+
+    def note_like(self, u, x):
+        likes = self._facts(u).setdefault("likes", [])
+        if x and x not in likes:
+            likes.append(x)
+            del likes[:-5]
