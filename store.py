@@ -31,6 +31,10 @@ DEFAULT_CONFIG = {
     "convo_end_cooldown": 90,   # after 'bye/stfu', don't re-open implicitly for this long
     "convo_followup_rate": 0.55,  # chance to add a follow-up question
     "tone": "normal",           # mild (PG, abuse capped at tier 1) | normal | savage (abuse starts at tier 2)
+    "images": "on",              # on | off | react-only : quietly judge pictures (pixel stats, no AI)
+    "image_reply_rate": 0.10,    # chance of an unprompted one-line verdict (per-channel cooldown below)
+    "image_cooldown": 300,       # seconds between unprompted verdicts per channel
+    "image_react_per_min": 8,    # max reactions per channel per minute
     # --- abuse retaliation ---
     "abuse_enabled": True,      # insults aimed at the bot always get fired back at
     "abuse_half_life": 180,     # seconds for a user's abuse level to halve

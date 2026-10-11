@@ -58,12 +58,23 @@ otherwise the bot uses a line that doesn't quote them. Kindness toward the bot (
 rude to you") gets a gracious-but-in-character reply that can name the rude person; "I created you /
 I'm your father" gets creator jokes; talking about the bot in third person gets called out.
 
+**Picture judging (no AI):** every image post (png/jpg/webp/gif first frame, max 8 MB) gets 1-2 emoji
+reactions picked from pixel statistics (Pillow): brightness, contrast, saturation, dominant colour,
+colourfulness, sharpness, grain, resolution/orientation, screenshot-, meme- and monochrome-heuristics and EXIF
+hints (phone model, time of day). It only *says* something when asked ("is this fire?", "rate this",
+"thoughts?"), when mentioned/replied to, or ~10% of the time (5 min per-channel cooldown); `!rate` forces a
+verdict (attach, reply to, or the latest picture). Likely selfies only get lighting/framing/background
+comments, never anything about the person. Reactions are capped per channel per minute.
+`!config images on|off|react-only`, `!config imagerate <percent> [cooldown_s] [reacts_per_min]`.
+Needs Pillow (`pip install -r requirements.txt`).
+
 ## Commands
 Run `!help` or `/help` in Discord for the full list.
 
 ## Bot permissions needed
 Moderate Members, Kick Members, Ban Members, Manage Messages, Manage Channels,
-Manage Roles (for lock/unlock), Read Message History, Send Messages, Embed Links.
+Manage Roles (for lock/unlock), Read Message History, Send Messages, Embed Links, Add Reactions
+(for picture judging).
 The bot's role must be ABOVE the roles of anyone it should timeout/kick/ban.
 Invite with scopes `bot` + `applications.commands`. Enable Message Content and
 Server Members intents in the Developer Portal.

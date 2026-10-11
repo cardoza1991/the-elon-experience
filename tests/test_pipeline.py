@@ -63,7 +63,7 @@ class FakeGuild:
 BOT_USER = FakeUser(1558667481500094604, "The Elon Experience", is_bot=True)
 
 
-def make_msg(text, author, channel, guild, *, mention_bot=False, mentions=(), reply_to=None, mid=None):
+def make_msg(text, author, channel, guild, *, mention_bot=False, mentions=(), reply_to=None, mid=None, attachments=()):
     m = mock.Mock()
     m.id = mid if mid is not None else next(_ids)
     m.content = text + (f" <@{BOT_USER.id}>" if mention_bot else "")
@@ -77,6 +77,8 @@ def make_msg(text, author, channel, guild, *, mention_bot=False, mentions=(), re
     else:
         m.reference = None
     m.reply = mock.AsyncMock()
+    m.add_reaction = mock.AsyncMock()
+    m.attachments = list(attachments)
     return m
 
 

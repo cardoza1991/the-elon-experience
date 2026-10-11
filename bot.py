@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 import brain
 import convo
 import moderation as mod
+import vision
 from store import DEFAULT_CONFIG, Store
 
 load_dotenv()
@@ -35,6 +36,9 @@ SPAM = mod.SpamDetector()
 RAID = mod.RaidDetector()
 WARNS = mod.WarnBook(store)
 CONVO = convo.Conversations(BRAIN)
+JUDGE = vision.ImageJudge(BRAIN)
+if not vision.HAVE_PIL:
+    print("Pillow missing - image judging disabled (pip install pillow)")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -184,6 +188,11 @@ async def on_ready():
         bot.synced = True
         for g in bot.guilds:
             await sync_guild(g)
+    for g in bot.guilds:
+        p = g.me.guild_permissions if g.me else None
+        if p is not None:
+            missing = [n for n in ("add_reactions", "read_message_history", "send_messages") if not getattr(p, n)]
+            print(f"Image judging perms in guild {g.id}: " + ("ok" if not missing else "MISSING " + ", ".join(missing)))
 
 
 async def sync_guild(g):
@@ -342,6 +351,71 @@ async def decide_reply(message):
     return reply
 
 
+def image_attachment(message):
+    for a in getattr(message, "attachments", None) or []:
+        if vision.is_image_attachment(a.filename, getattr(a, "content_type", None), getattr(a, "size", 0)):
+            return a
+    return None
+
+
+async def image_features(att):
+    """Download (with timeout) and analyse off the event loop. Raises on failure."""
+    data = await asyncio.wait_for(att.read(), timeout=10)
+    return await asyncio.wait_for(asyncio.to_thread(vision.analyze, data, att.filename), timeout=15)
+
+
+async def add_reactions(message, emojis):
+    ch, g = message.channel, message.guild
+    perms = ch.permissions_for(g.me)
+    if not (perms.add_reactions and perms.read_message_history):
+        return 0
+    n = 0
+    for e in emojis:
+        try:
+            await message.add_reaction(e)
+            n += 1
+        except discord.HTTPException as ex:
+            print(f"reaction failed: {ex}")
+            break
+    return n
+
+
+async def judge_image(message, att):
+    """Quietly judge an image post: react (cheap, capped per channel) and maybe build ONE verdict.
+    Returns a brain.Reply for deliver() or None. Never sends text itself."""
+    g, ch, author = message.guild, message.channel, message.author
+    c = cfg(g)
+    if not vision.HAVE_PIL or c.get("images", "on") == "off":
+        return None
+    text = message.content or ""
+    target = await reply_target(message)
+    explicit = bot.user in message.mentions or target == "bot"
+    other_target = target == "other" or any(m.id != bot.user.id for m in message.mentions)
+    parent = getattr(ch, "parent_id", None)
+    ignored = bool(({ch.id, parent} - {None}) & set(c["ignore_channels"]))
+    abusive = CONVO.is_abuse(brain.clean_text(text), in_context=explicit, cfg=c) if text else False
+    react, want = JUDGE.plan(g.id, ch.id, author.id, text, cfg=c, explicit=explicit, ignored=ignored,
+                             other_target=other_target and not explicit, abusive=abusive)
+    perms = ch.permissions_for(g.me)
+    react = react and perms.add_reactions and perms.read_message_history
+    if not (react or want):
+        return None
+    try:
+        f = await image_features(att)
+    except Exception as e:
+        print(f"image judge skipped: {type(e).__name__}: {e}")
+        return None
+    if react:
+        await add_reactions(message, vision.emojis(f))
+    if not want:
+        return None
+    line = JUDGE.verdict(f, gid=g.id, uid=author.id, name=name_of(author), cfg=c, asked=JUDGE.asked(text),
+                         extra=c["blocklist_extra"])
+    r = brain.Reply("image", line, "line")
+    r.explicit = True
+    return r
+
+
 async def deliver(message, reply):
     """The ONLY place that sends a conversational reply. Exactly one send per reply."""
     ch, g = message.channel, message.guild
@@ -380,6 +454,18 @@ async def on_message(message):
     if ctx.valid:
         await bot.invoke(ctx)
         return
+
+    att = image_attachment(message)
+    if att is not None:
+        verdict = None
+        try:
+            verdict = await judge_image(message, att)
+        except Exception as e:
+            print(f"image judge error: {type(e).__name__}: {e}")
+        if verdict is not None:  # the verdict IS this message's one reply
+            BRAIN.observe(message.guild.id, message.author.id, name_of(message.author), message.content or "", None)
+            await deliver(message, verdict)
+            return
 
     reply = await decide_reply(message)
     if reply is not None:
@@ -445,6 +531,7 @@ async def help_cmd(ctx):
     e.add_field(name="Fun", inline=False, value=(
         "`elon [topic]` real Elon tweet (aliases quote, tweet)\n"
         "`roast [@user]` targeted roast\n"
+        "`rate` judge a picture (attach one, reply to one, or the latest in the channel)\n"
         "`profile [@user]` what the bot remembers about you\n"
         "`chat on|off|status [#channel]` conversation mode per channel (Manage Channels)"))
     e.add_field(name="Moderation", inline=False, value=(
@@ -474,6 +561,7 @@ async def help_cmd(ctx):
         "`config convo <timeout_s> [max_partners] [per_minute] [busy_speakers]`\n"
         "`config abuse on|off [half_life_s] [cooldown_s] [per_minute]`\n"
         "`config tone mild|normal|savage`\n"
+        "`config images on|off|react-only` · `config imagerate <percent> [cooldown_s] [reacts_per_min]`\n"
         "`config tweetthreshold <0.05-0.6>`"))
     e.set_footer(text="No AI was harmed in the making of this bot. It's all if-statements.")
     await say(ctx, embed=e, ephemeral=False)
@@ -498,6 +586,67 @@ async def roast_cmd(ctx, member: Optional[discord.Member] = None):
         target = ctx.author
     line = BRAIN.roast(ctx.guild.id, target.id, name_of(target), extra_block(ctx.guild))
     await say(ctx, f"{target.mention} {line}", ephemeral=False)
+
+
+async def _find_image(ctx, image=None):
+    """(attachment, message it belongs to or None): explicit attachment, this message, the replied-to
+    message, or the latest image in the channel (last 20 messages)."""
+    if image is not None:
+        return image, (ctx.message if ctx.interaction is None else None)
+    if ctx.interaction is None:
+        a = image_attachment(ctx.message)
+        if a:
+            return a, ctx.message
+        ref = ctx.message.reference
+        if ref and ref.message_id:
+            try:
+                m = ref.resolved if isinstance(ref.resolved, discord.Message) else await ctx.channel.fetch_message(ref.message_id)
+                a = image_attachment(m)
+                if a:
+                    return a, m
+            except discord.HTTPException:
+                pass
+    try:
+        async for m in ctx.channel.history(limit=20):
+            if m.author.bot:
+                continue
+            a = image_attachment(m)
+            if a:
+                return a, m
+    except discord.HTTPException:
+        pass
+    return None, None
+
+
+@bot.hybrid_command(name="rate", description="Judge a picture: attach one, reply to one, or rate the latest one")
+@app_commands.describe(image="The picture to judge (optional: otherwise the latest picture in the channel)")
+@commands.guild_only()
+async def rate_cmd(ctx, image: Optional[discord.Attachment] = None):
+    c = cfg(ctx.guild)
+    if not vision.HAVE_PIL or c.get("images", "on") == "off":
+        await say(ctx, "Image judging is off here. A mod can turn it on with `config images on`.")
+        return
+    if image is not None and not vision.is_image_attachment(image.filename, image.content_type, image.size):
+        await say(ctx, "That's not a picture I can judge (png/jpg/webp/gif, max 8 MB).")
+        return
+    att, msg = await _find_image(ctx, image)
+    if att is None:
+        await say(ctx, "Attach a picture, reply to one, or post one first. I can't judge vibes alone. Yet.")
+        return
+    if ctx.interaction is not None:
+        await ctx.defer()
+    try:
+        f = await image_features(att)
+    except Exception as e:
+        print(f"rate failed: {type(e).__name__}: {e}")
+        await say(ctx, "Couldn't even open that one. 0/10 for the file, no comment on the art.", ephemeral=False)
+        return
+    who = msg.author if msg is not None else ctx.author
+    line = JUDGE.verdict(f, gid=ctx.guild.id, uid=who.id, name=name_of(who), cfg=c, asked=True,
+                         extra=c["blocklist_extra"])
+    if msg is not None and JUDGE.react_allowed(ctx.guild.id, ctx.channel.id, c):
+        await add_reactions(msg, vision.emojis(f))
+    await say(ctx, line, ephemeral=False)
 
 
 @bot.hybrid_command(name="profile", description="What the bot remembers about you")
@@ -827,6 +976,8 @@ async def config_grp(ctx):
                                             f"{c['convo_per_min']} replies/min, busy at {c['convo_busy_speakers']} speakers\n"
                                             f"off in: {chans(c['chat_off_channels'])}", inline=False)
     e.add_field(name="Tone", value=c["tone"])
+    e.add_field(name="Images", value=f"{c['images']}: {_pct(c['image_reply_rate'])} unprompted verdicts, "
+                                     f"{c['image_cooldown']}s/channel, {c['image_react_per_min']} reactions/min")
     e.add_field(name="Abuse retaliation", value=("on" if c["abuse_enabled"] else "off") +
                 f": half-life {c['abuse_half_life']}s, cooldown {c['abuse_cooldown']}s, {c['abuse_per_min']}/min per user",
                 inline=False)
@@ -1041,6 +1192,27 @@ async def cfg_tone(ctx, level: Literal["mild", "normal", "savage"]):
     store.set_cfg(ctx.guild.id, "tone", level)
     await _saved(ctx, {"mild": "Tone: mild. PG mode, comebacks capped at tier 1. (Boring, but okay.)",
                        "normal": "Tone: normal.", "savage": "Tone: savage. Comebacks start at tier 2. Good luck."}[level])
+
+
+@_cfgcmd("images", "Quietly judge pictures: on, off, or react-only (emoji reactions, no comments)")
+async def cfg_images(ctx, mode: Literal["on", "off", "react-only"]):
+    store.set_cfg(ctx.guild.id, "images", mode)
+    await _saved(ctx, {"on": "Image judging on: reactions, and a verdict when asked (or now and then).",
+                       "off": "Image judging off.",
+                       "react-only": "Image judging: react-only. Silent judgment via emoji. `!rate` still works."}[mode])
+
+
+@_cfgcmd("imagerate", "Chance of an unprompted picture verdict in percent (default 10), cooldown, reactions/min")
+async def cfg_imagerate(ctx, percent: commands.Range[float, 0, 100], cooldown: commands.Range[int, 0, 86400] = None,
+                        reacts_per_min: commands.Range[int, 0, 60] = None):
+    store.set_cfg(ctx.guild.id, "image_reply_rate", round(percent / 100, 4))
+    if cooldown is not None:
+        store.set_cfg(ctx.guild.id, "image_cooldown", cooldown)
+    if reacts_per_min is not None:
+        store.set_cfg(ctx.guild.id, "image_react_per_min", reacts_per_min)
+    c = cfg(ctx.guild)
+    await _saved(ctx, f"Image verdicts {percent:g}% unprompted, {c['image_cooldown']}s/channel cooldown, "
+                      f"{c['image_react_per_min']} reactions/min")
 
 
 @_cfgcmd("tweetthreshold", "How relevant a tweet must be to auto-post (0.05 loose - 0.6 strict, default 0.15)")
