@@ -426,7 +426,8 @@ class TestReflection(unittest.TestCase):
 
     def test_clean_slot(self):
         self.assertEqual(convo.clean_slot("tired lol"), "tired")
-        self.assertTrue(len(convo.clean_slot("a " * 40)) <= 53)
+        self.assertEqual(convo.clean_slot("a " * 40), "")  # too long -> dropped, never '...'
+        self.assertNotIn("...", convo.clean_slot("word " * 7))
 
 
 if __name__ == "__main__":

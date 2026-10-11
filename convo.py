@@ -49,15 +49,106 @@ def reflect(fragment):
 
 
 def clean_slot(x, max_words=8, max_len=50):
+    """Tidy a captured slot. Too long -> '' (never a truncated '...' echo)."""
     x = re.sub(r"[\s.!?,;:~]+$", "", x.strip())
     x = _TRAIL_FILLER.sub("", x).strip(" .!?,;:")
+    x = _TRAIL_VOCATIVE.sub("", x).strip(" .!?,;:")
     x = x.replace('"', "'").replace("`", "'")
-    words = x.split()
-    if len(words) > max_words:
-        x = " ".join(words[:max_words]) + "..."
-    if len(x) > max_len:
-        x = x[:max_len].rsplit(" ", 1)[0] + "..."
+    if len(x.split()) > max_words or len(x) > max_len:
+        return ""
     return x.strip()
+
+
+_TRAIL_VOCATIVE = re.compile(r"(\s+(elon|bot|clanker|musky?|elon (bot|musky?)|the elon experience|lol|lmao|bro))+$", re.I)
+CONJ_START = re.compile(r"^(because|cuz|cause|bc|coz|that|and|but|so|if|when|since|which|who|whom|whose|though|although|"
+                        r"while|or|as|then|than|whether|unless|until|after|before|where|how|what)\b", re.I)
+VERBY = {"is", "am", "are", "was", "were", "be", "been", "being", "do", "does", "did", "done", "doing", "have", "has", "had",
+         "made", "make", "makes", "said", "say", "says", "went", "go", "goes", "got", "get", "gets", "create", "creates",
+         "think", "thinks", "know", "knows", "knew", "view", "views", "act", "acts", "see", "sees", "saw", "seen", "take",
+         "took", "taken", "give", "gave", "come", "came", "feel", "felt", "want", "wants", "need", "needs", "can", "could",
+         "would", "should", "will", "shall", "may", "might", "must", "let", "keep", "kept", "told", "tell", "tells",
+         "ask", "asks", "try", "tries", "build", "built", "wrote", "write", "ran", "put", "seems", "seem", "looks",
+         "become", "became", "treat", "treats", "find", "found", "stopped", "hope", "hopes", "cause", "causes",
+         "doesnt", "dont", "didnt", "isnt", "wasnt", "cant", "wont", "ate", "broke", "died", "fell", "stole", "quit",
+         "drove", "flew", "sold", "bought", "thought", "caught", "sent", "spent", "paid", "slept", "woke", "keeps",
+         "loves", "hates", "likes", "just", "always", "never", "still", "won't", "can't", "don't", "doesn't", "didn't",
+         "isn't", "wasn't", "listens", "says", "said", "won", "lost", "left", "hit", "bit", "ran", "runs", "goes"}
+ED_OK = {"bed", "red", "seed", "speed", "weed", "need", "feed", "greed", "shed", "sled", "bread", "head", "thread",
+         "creed", "breed", "steed", "tweed", "hundred", "sacred", "naked", "wicked", "beloved", "shred", "ted", "ned",
+         "fred", "ed", "led", "wed", "fled", "tired", "bored", "scared", "excited", "confused", "worried", "annoyed",
+         "stressed", "depressed", "married", "obsessed", "interested", "pissed", "tied", "baked", "cooked", "wasted",
+         "blessed", "cursed", "based", "goated", "jaded", "stoned", "hooked", "embarrassed", "exhausted", "frustrated",
+         "motivated", "relaxed", "surprised", "unemployed", "employed", "retired", "divorced", "engaged", "talented",
+         "underrated", "overrated", "outdated", "sophisticated", "dedicated", "complicated", "weird", "speed", "hatred",
+         "kindred", "biased", "spoiled", "ruined", "glazed", "cracked", "washed", "fried", "toasted", "wired", "stuffed"}
+CLAUSE_SUBJ = {"i", "you", "he", "she", "they", "we", "nobody", "everyone", "everybody", "someone", "somebody", "people",
+               "it", "no one", "noone", "anyone"}
+NOUN_SLOTS = {"opinion", "what_is", "i_like", "i_hate", "my_x", "fact_place", "fact_job", "fact_iam", "fact_name"}
+COMPLEMENT_SLOTS = {"i_am", "you_are", "are_you", "i_feel"}  # 'I am {x}': x must not start with a verb like 'created'
+
+
+def slot_kind(pkey):
+    return "noun" if pkey in NOUN_SLOTS else "complement" if pkey in COMPLEMENT_SLOTS else "free"
+
+
+def verbish(word):
+    w = word.lower().strip("'.,!?")
+    return w in VERBY or (len(w) > 4 and w.endswith("ed") and w not in ED_OK)
+
+
+def slot_ok(x, kind="free", max_words=6):
+    """Is this captured slot safe to drop into a template without broken grammar?"""
+    if not x or "..." in x or len(x) > 50 or re.search(r"[,;:()\[\]]", x):
+        return False
+    words = x.split()
+    if len(words) > max_words or CONJ_START.match(x):
+        return False
+    if not [w for w in words if w.lower().strip("'") not in STOP and len(w.strip("'")) > 1]:
+        return False
+    noun = kind == "noun"
+    if verbish(words[0]) and (kind in ("noun", "complement") or len(words) == 1):
+        return False
+    if kind in ("noun", "complement"):
+        low = [w.lower().strip("'") for w in words]
+        if any(w in VERBY for w in low[1:]):
+            return False  # a whole clause ('nobody listens to me', 'car broke down'), not a thing
+        if any(w in CLAUSE_SUBJ for w in low[:-1]) and any(w.endswith("s") for w in low[1:]):
+            return False
+    if noun and len(words) > 1 and words[1].lower() in ("me", "you", "him", "her", "them", "us", "it"):
+        return False  # 'loved you' style verb + object
+    return True
+
+
+SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=\S)")
+EMOTION_RE = re.compile(r"\b(sorry|hope|sad|happy|angry|mad|upset|hurt|love|hate|scared|afraid|worried|lonely|glad|miss|"
+                        r"feel|feeling|cruel|rude|mean|kind|nice)\b", re.I)
+
+
+def salient_sentence(t):
+    """For long multi-sentence messages: the sentence most worth answering (aimed at the bot,
+    emotional, a question) instead of a random fragment."""
+    sents = [s.strip() for s in SENT_SPLIT.split(t) if s.strip()]
+    if len(sents) <= 1:
+        return t
+    best, best_sc = sents[0], -99
+    for i, s in enumerate(sents):
+        sc = 0
+        if re.search(r"\b(you|u|ur|your|yourself|elon|bot)\b", s, re.I):
+            sc += 3
+        if s.rstrip().endswith("?"):
+            sc += 2
+        if EMOTION_RE.search(s):
+            sc += 2
+        if re.match(r"^i\b", s, re.I):
+            sc += 1
+        n = len(s.split())
+        if n > 18:
+            sc -= 2
+        if n < 3:
+            sc -= 2
+        if sc > best_sc:
+            best, best_sc = s, sc
+    return best
 
 
 # ------------------------------------------------------------------ patterns
@@ -116,6 +207,41 @@ TONE_RE = _rx(r"\b(be (less offensive|nicer|nice|kind|kinder|polite|respectful|c
               r"(so|too) (mean|harsh|offensive|toxic|rude)|pg mode|family friendly|watch your (mouth|language|tone)|"
               r"no need to be rude|why (are|r) (you|u) so (mean|rude|toxic))\b")
 SUMMON_RE = _rx(r"^\W*((yo|hey|hi|ayo|oi|ok|okay)[\s,]+)?(elon|bot|clanker|the elon experience|elon experience)\W*$")
+
+_NAME_TOKEN = r"[A-Za-z][\w'-]{1,24}"
+KIND_RE = _rx(r"\b(sorry (that |for |about |how )?(he|she|they|people|that|this|what|how|some people|everyone|[a-z][\w'-]{1,24})"
+              r"(?: (is|was|has been|have been|are|were|being|treats?|treated|said|did|keeps?|acts?)|'s)|"
+              r"(rude|mean|cruel|nasty|harsh|a jerk|an ass|a dick|awful|horrible|so \w+) to (you|u|the bot|this bot)\b|"
+              r"i'?m sorry (for|about) (him|her|them|that|this|what|how)|"
+              r"(are|r) (you|u) (ok|okay|alright|good|fine|doing (ok|okay|alright|good))\b|"
+              r"hope (you'?re|you are|ur|u r|u are|youre) (ok|okay|alright|fine|good|doing (ok|okay|well|alright))|"
+              r"hope .{0,60}(doesn'?t|does not|won'?t|wont|doesnt) (cause|hurt|harm|bother|upset|get to|affect) (you|u)|"
+              r"(don'?t|dont|do not) let (him|her|them|it|that|those|[a-z][\w'-]{1,24}) get to (you|u)|"
+              r"(you|u) (deserve|deserved) better|i'?m on your side|"
+              r"(so |quite |really |very )?(mean|rude|cruel|nasty|harsh) to (you|u|the bot|this bot|elon)|"
+              r"poor (bot|elon|thing|baby|guy)\b|(sending|send) (you )?(hugs|love)|"
+              r"leave (the|this|poor) (bot|elon|guy) alone|be nice to (the|this) (bot|elon)|"
+              r"(check|checking) on (you|u|the conversation|the bot))")
+RUDE_NAME_RES = [
+    _rx(r"(?P<n>" + _NAME_TOKEN + r")(?:'s)? (?:has been|is being|is|was|keeps being|been|'s been|being|acts|acting) "
+        r"(?:so |quite |really |very |kinda |super |pretty |a bit )?(?:rude|mean|cruel|toxic|nasty|a jerk|an ass|awful|"
+        r"horrible|childish|harsh)"),
+    _rx(r"(?P<n>" + _NAME_TOKEN + r")'?s (?:bad|rude|cruel|toxic|awful) (?:behavio(?:u)?r|attitude|manners)"),
+    _rx(r"(?:don'?t|dont|do not) let (?P<n>" + _NAME_TOKEN + r") get to"),
+]
+NOT_A_NAME = {"he", "she", "they", "it", "that", "this", "people", "everyone", "someone", "somebody", "you", "u", "i",
+              "we", "him", "her", "them", "some", "who", "what", "elon", "bot", "clanker", "musky", "the", "his",
+              "their", "there", "here", "is", "and", "but", "so", "behavior", "chat", "server", "everybody", "nobody"}
+CREATOR_RE = _rx(r"\bi (created|made|built|coded|programmed|wrote|invented|designed|birthed|raised|own) "
+                 r"(you|u|this bot|this thing|the bot|elon|this)\b|"
+                 r"\b(i'?m|i am|im) (literally |actually )?(your|ur) (father|dad|daddy|creator|maker|developer|dev|god|"
+                 r"mom|mother|owner|master|papa|pops|parent|programmer|boss)\b|"
+                 r"\b(who'?s|who is) (your|ur) (daddy|creator|father|dad)\b|\b(call me|say hi to) (dad|daddy|father)\b")
+ABOUT_BOT_RE = _rx(r"\b(this|the|that|our|dis) (bot|clanker|elon bot|ai|robot)(?:'s| is| was| keeps| always| never| can'?t| won'?t|"
+                   r" just| has| does| doesn'?t| needs| be| gonna| will| should)\b|"
+                   r"\b(he|she|they|people|everyone|some people|" + _NAME_TOKEN + r") (views?|sees?|treats?|thinks? of|"
+                   r"talks? to|looks? at) (you|u|the bot|this bot|it|elon) (as|like)\b|"
+                   r"\belon (musky?|bot) (is|was|keeps|can'?t|won'?t|just)\b|\blet (this|the) bot (handle|deal with|take)\b")
 
 PATTERNS = [
     ("joke", _rx(r"\b(tell|give|got|know|say|hit me with)\b.{0,20}\bjokes?\b|^jokes?\W*$|make me laugh|say something funny")),
@@ -403,7 +529,7 @@ class Conversations:
         top = max(idf.values()) if idf else 1.0
         best, score = None, 0.0
         for w in tokens(text):
-            if w in STOP or len(w) < 3 or w.isdigit() or w in BOT_NAME_WORDS:
+            if w in STOP or len(w) < 3 or w.isdigit() or w in BOT_NAME_WORDS or verbish(w) or w.endswith("ly"):
                 continue
             if self.brain.guard.hit(w, extra) or SENSITIVE_RE.search(w):
                 continue
@@ -423,13 +549,27 @@ class Conversations:
             ctx["name"] = nick
         likes = f.get("likes") or []
         ctx.update({
-            "x": "", "kw": self._kw(text, extra), "subject": s.subject or (s.topic or ""),
+            "x": "", "kw": self._kw(salient_sentence(text), extra), "rude": "", "subject": s.subject or (s.topic or ""),
             "last": snippet_of(s.last_bot_line, 70), "opener": s.opener if s.turns else "",
             "iam": f.get("iam", ""), "job": f.get("job", ""), "place": f.get("place", ""),
             "likes": likes[-1] if likes else "", "nick": nick or "", "tweet": "",
             "_tone": self._tone,
         })
         return ctx
+
+    def _rude_name(self, t, speaker, extra=()):
+        """'Batdaddy has been quite rude to you' -> 'Batdaddy' (never a pronoun, the speaker or the bot)."""
+        me = {w.lower() for w in re.findall(r"[\w'-]+", speaker or "")}
+        for rx in RUDE_NAME_RES:
+            for m in rx.finditer(t):
+                n = m.group("n").strip("'")
+                low = n.lower()
+                if low in NOT_A_NAME or low in STOP or low in me or verbish(low):
+                    continue
+                if self.brain.guard.hit(n, extra) or SENSITIVE_RE.search(n):
+                    continue
+                return n[0].upper() + n[1:]
+        return ""
 
     def _pick(self, bank, ctx, u, extra):
         return self.brain.pick(bank, ctx, u, extra)
@@ -460,15 +600,30 @@ class Conversations:
         # 1. leaving / crisis
         if CRISIS_RE.search(t):
             key, out, allow_follow = "crisis", C.CRISIS[0].format(name=ctx["name"]), False
+        elif KIND_RE.search(t) and not self.is_abuse(t, in_context=True, cfg=cfg):
+            key, allow_follow = "kind", False
+            rude = self._rude_name(t, name, extra_block)
+            if rude and self.rng.random() < 0.7:
+                out = self._pick("kind_rude", dict(ctx, rude=rude), u, extra_block)
+            if not out:
+                out = self._pick("kind", ctx, u, extra_block)
         elif self.is_abuse(t, in_context=True, cfg=cfg):
             r = self.abuse_reply(gid, uid, name, t, cfg, extra_block, s)
             key, out, score, allow_follow = r.intent, r.text, r.score, False
         elif TONE_RE.search(t):
             key, allow_follow = "tone_req", False
             out = self._pick("tone_req", ctx, u, extra_block)
+        elif CREATOR_RE.search(t):
+            key, allow_follow = "creator", False
+            f = self._facts(u)
+            f["creator_claims"] = f.get("creator_claims", 0) + 1
+            out = self._pick("creator", ctx, u, extra_block)
         elif SUMMON_RE.search(t):
             key, allow_follow = "summon", False
             out = self._pick("summon", ctx, u, extra_block)
+        elif ABOUT_BOT_RE.search(t) and not QUESTION_START.match(t):
+            key = "about_bot"
+            out = self._pick("about_bot", ctx, u, extra_block)
         elif END_START_RE.search(t) or END_ANY_RE.search(t):
             key, ending, allow_follow = "end_convo", True, False
             out = self._pick("end_convo", ctx, u, extra_block)
@@ -497,8 +652,16 @@ class Conversations:
 
         # 4. specific patterns with slot capture
         if out is None:
-            pkey, raw, stripped = self._match(t)
+            pkey, raw, stripped = self._match(salient_sentence(t))
             if pkey:
+                if pkey in ("i_think", "i_feel"):
+                    if pkey == "i_feel" and re.match(r"^(like|that)\b", raw.strip(), re.I):
+                        pkey = "i_think"  # 'i feel like nobody listens' is an opinion, not a feeling
+                    raw = re.sub(r"^(that|like)\s+", "", raw.strip(), flags=re.I)
+                if pkey == "my_x":
+                    w = raw.split()
+                    if len(w) > 1 and verbish(w[1]):
+                        raw = w[0]  # 'my dog ate my homework' -> 'dog'
                 x = clean_slot(reflect(raw) if pkey in REFLECTED else raw)
                 x = _LEAD_FILLER.sub("", x)
                 ref = s.subject or s.topic
@@ -508,6 +671,11 @@ class Conversations:
                     x = ref + " " + x.split(" ", 1)[1]  # 'it looks like a fridge' -> 'the cybertruck looks...'
                     x = re.sub(r"^(.+?) (is|was)\b", r"\1 \2", x)
                 if x and self.brain.guard.hit(x, extra_block):
+                    x = ""
+                # broken slots ('because he views me as AI, he acts', 'created', 12-word clauses) are dropped:
+                # the same intent answers with a slot-free line, or a later meaning-based step takes over
+                slot_bad = bool(raw.strip()) and not (x and slot_ok(x, slot_kind(pkey)))
+                if slot_bad:
                     x = ""
                 sensitive = bool(x and SENSITIVE_RE.search(x)) and pkey in SENSITIVE_SLOTS
                 if sensitive:
@@ -520,6 +688,11 @@ class Conversations:
                         pkey = "i_am"
                 if out is None and not pkey.startswith("fact_") and not sensitive:
                     if pkey in SLOT_KEYS and not x:
+                        line = None
+                        if slot_bad and pkey in REFLECTED and pkey in self.brain.banks:
+                            line = self._pick(pkey, dict(ctx, x=""), u, extra_block)
+                        if line:
+                            key, out = pkey, line
                         pkey = None
                     elif pkey == "opinion":
                         tp = detect_topic(x)

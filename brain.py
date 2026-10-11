@@ -59,11 +59,14 @@ def clean_text(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
-def snippet_of(text, limit=60):
+def snippet_of(text, limit=60, trim=False):
+    """Short quote of a message. Too long -> '' (no '...' echoes) unless trim=True (UI labels only)."""
     t = URL_RE.sub("", clean_text(text)).replace('"', "'").replace("`", "'").strip()
     if not t:
         return ""
     if len(t) > limit:
+        if not trim:
+            return ""
         t = t[: limit].rsplit(" ", 1)[0] + "..."
     return t
 
@@ -490,6 +493,8 @@ class Brain:
             name = short if len(short) >= 2 else name
         name = name if name and not self.guard.hit(name, extra) else "bro"
         snip = snippet_of(text)
+        if len(re.findall(r"[.!?]\s+\S", snip)) >= 1:
+            snip = ""  # multi-sentence messages never get parroted back whole
         if snip and (self.guard.hit(snip, extra) or len(snip) < 2):
             snip = ""
         last_topic = topic or (max(u["topics"], key=u["topics"].get) if u.get("topics") else None)

@@ -51,6 +51,13 @@ guard; no protected-trait attacks. `!config abuse on|off [half_life] [cooldown] 
 tier 2). Messages that mention or reply to someone else are never auto-answered unless they name the bot.
 Lines that just parrot your message back are capped (~1 in 4, never twice in a row).
 
+**Reading people better:** long multi-sentence messages are answered from their most relevant sentence
+(aimed at the bot, emotional, or a question). Captured phrases only go into a template if they pass a
+grammar check (no verb fragments, no 'because/that' clauses, no 7+ word chunks, never a '...' cut-off);
+otherwise the bot uses a line that doesn't quote them. Kindness toward the bot ("are you ok", "sorry he's
+rude to you") gets a gracious-but-in-character reply that can name the rude person; "I created you /
+I'm your father" gets creator jokes; talking about the bot in third person gets called out.
+
 ## Commands
 Run `!help` or `/help` in Discord for the full list.
 

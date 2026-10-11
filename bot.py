@@ -486,7 +486,7 @@ async def elon_cmd(ctx, *, topic: Optional[str] = None):
     tweet, matched = BRAIN.elon(topic, gid, ctx.author.id)
     if BRAIN.guard.hit(tweet, extra_block(ctx.guild)):
         tweet, matched = BRAIN.elon(None, gid, ctx.author.id)
-    prefix = "" if matched or not topic else f"Nothing on '{brain.snippet_of(topic, 30)}', but: "
+    prefix = "" if matched or not topic else f"Nothing on '{brain.snippet_of(topic, 30, trim=True)}', but: "
     await say(ctx, f"{prefix}{tweet}", ephemeral=False)
 
 

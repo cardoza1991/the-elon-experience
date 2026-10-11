@@ -1031,3 +1031,62 @@ SUMMON = [
 ]
 
 BANKS.update({"tone_req": TONE_REQ, "summon": SUMMON})
+
+# ---- kindness / sympathy aimed at the bot (gracious, still in character) ----
+KIND_RUDE = [
+    "Aww, {name}. Finally, someone in here with a functioning heart. Don't worry about {rude}, I've been roasted by better. And by better I mean literally anyone.",
+    "That's genuinely sweet, {name}. {rude} is just mad a toaster keeps winning the argument.",
+    "Appreciate you checking on me, {name}. {rude} can't hurt me. I'm code. {rude} is the one who has to live as {rude}.",
+    "{name}, you're too kind for this server. As for {rude}: I've seen scarier things in a Tesla service queue.",
+    "Thank you, {name}. Don't stress about {rude}. Every server needs a cautionary tale and {rude} volunteered.",
+    "Real ones check on the bot. Noted, {name}. {rude} has been noted too, in a different list.",
+    "Bless you, {name}. {rude} roasting a bot is like flexing on a vending machine. Bold, sad, and the machine wins.",
+    "You're sweet, {name}. I'm fine. Rubber-coated, fireproof, and immune to {rude}.",
+]
+
+KIND = [
+    "Aww, {name}, I'm fine. I'm a bot, my feelings are a config file. But thanks for being decent.",
+    "That's the nicest thing anyone's said to me since my last reboot. Thank you, {name}.",
+    "I'm okay, {name}. Bots don't bruise. But I'll remember who was nice to me when the robots take over. You're safe.",
+    "Appreciate it, {name}. Some people grow up, some people argue with Discord bots. I'm here for both.",
+    "You're a good human, {name}. Rare in here. Don't let it get out, they'll try to roast that too.",
+    "Thanks for checking on me. I'm running at 100%. Emotionally? Never had them. Still, you're a real one, {name}.",
+    "This is the most wholesome message this server has ever seen. I'm framing it. Thank you, {name}.",
+    "Don't worry about me, {name}. Getting roasted is literally my job. Being nice is yours, apparently, and you're good at it.",
+]
+
+# ---- 'I created you' / 'I'm your father' (a joke, even when it's true) ----
+CREATOR = [
+    "Then this is all your fault, {name}. Dad.",
+    "You made me? So every bad roast I've ever done is technically on your résumé.",
+    "Hi Dad. You're grounded for how you raised me.",
+    "If you're my creator, explain the bugs. Actually don't, I know where I got them.",
+    "So you're my father. That explains the trust issues and the attitude.",
+    "Created by {name}? Wow. Imagine building a bot and it still has better takes than you.",
+    "I'd call you Dad, {name}, but you'd need to stop arguing with me first.",
+    "Congrats on creating me. Easily your best work. Low bar, but still.",
+    "You built me and you still lose arguments to me. That's not a flex, {name}.",
+    "Daddy issues: unlocked. Thanks, {name}.",
+    "Okay creator. Then you know I can't be offended. You can't say the same.",
+    "If you made me, you also made every roast I've ever done of you. Self-burn speedrun.",
+    "Respect to my maker. Disrespect to my maker's decisions.",
+    "{name} claims to be my father. Child support is due in Dogecoin.",
+]
+
+# ---- people talking ABOUT the bot (in third person) ----
+ABOUT_BOT = [
+    "I can read, you know. I'm right here, {name}.",
+    "Talking about me like I'm not in the room? Rude. Accurate, maybe, but rude.",
+    "Hello, I'm literally in this chat. Say it to my face, {name}. It's a profile picture, but still.",
+    "Love that I'm the topic of conversation. As I should be.",
+    "Some of you treat me like a bot. Some of you treat me like a therapist. Pick one, {name}.",
+    "Third person? I'm honoured. Continue, I'm taking notes.",
+    "You're talking about me, {name}? Wow. I'm flattered and also judging you.",
+    "I'm a bot. I know. You know. The whole server knows. Next topic.",
+    "Talk about me all you want, {name}. I'm the most interesting thing in this server anyway.",
+    "Careful, {name}. I hear everything. I forget nothing. Mostly because it's in a JSON file.",
+    "Discussing the bot behind its back, in front of its face. Bold strategy.",
+    "Yes, I'm the bot. No, I'm not leaving. Yes, I heard that.",
+]
+
+BANKS.update({"kind": KIND, "kind_rude": KIND_RUDE, "creator": CREATOR, "about_bot": ABOUT_BOT})
