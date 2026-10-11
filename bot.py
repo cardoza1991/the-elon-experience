@@ -15,26 +15,36 @@ intents.members = True
 
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
-# Load real Elon tweets
+# Load real Elon tweets (optional)
 ELON_QUOTES = []
-try:
-    with open('elon_tweets_sample.csv', 'r', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            text = row.get('Tweet.content', '').strip()
-            lang = row.get('Language', '')
-            if (lang == 'en' and 
-                isinstance(text, str) and 
-                25 < len(text) < 250 and 
-                not text.startswith('http') and 
-                not text.startswith('@') and
-                'http' not in text.lower()[:50]):
-                ELON_QUOTES.append(text)
-except Exception as e:
-    print(f"Could not load tweets: {e}")
-    ELON_QUOTES = ["The future is going to be wild."]
+csv_path = 'elon_tweets_sample.csv'
+if os.path.exists(csv_path):
+    try:
+        with open(csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                text = row.get('Tweet.content', '').strip()
+                lang = row.get('Language', '')
+                if (lang == 'en' and
+                    isinstance(text, str) and
+                    25 < len(text) < 250 and
+                    not text.startswith('http') and
+                    not text.startswith('@') and
+                    'http' not in text.lower()[:50]):
+                    ELON_QUOTES.append(text)
+        print(f"Loaded {len(ELON_QUOTES)} Elon quotes from CSV")
+    except Exception as e:
+        print(f"Error reading CSV: {e}")
+else:
+    print(f"No {csv_path} found — using fallback quotes only")
 
-print(f"Loaded {len(ELON_QUOTES)} Elon quotes")
+if not ELON_QUOTES:
+    ELON_QUOTES = [
+        "The future is going to be wild.",
+        "Let's make life multiplanetary.",
+        "Occupy Mars.",
+        "The most entertaining outcome is the most likely.",
+    ]
 
 # Extra toxic / shit-talk lines mixed in
 ROASTS = [
@@ -55,10 +65,9 @@ ROASTS = [
     "Okay but counterpoint: no.",
 ]
 
-JUMP_CHANCE = 0.12  # higher chance
+JUMP_CHANCE = 0.12
 
 def get_line():
-    # Mix real Elon quotes with custom roasts
     if random.random() < 0.65 and ELON_QUOTES:
         return random.choice(ELON_QUOTES)
     return random.choice(ROASTS)
@@ -144,5 +153,7 @@ if __name__ == '__main__':
     token = os.getenv('DISCORD_TOKEN')
     if not token:
         print("Error: DISCORD_TOKEN not found in .env")
+        print("Create a .env file with: DISCORD_TOKEN=your_bot_token")
     else:
+        print("Starting bot... (if you see 'session has been invalidated', reset the token and enable Message Content + Server Members intents)")
         bot.run(token)
