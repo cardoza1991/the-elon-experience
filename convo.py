@@ -136,6 +136,8 @@ def slot_ok(x, kind="free", max_words=6):
     words = x.split()
     if len(words) > max_words or CONJ_START.match(x) or AGREE_BAD_RE.search(x):
         return False
+    if brain.abusive(x) or brain.GRIEF_RE.search(x):
+        return False  # 'I think gfys is fine' never happens
     if not [w for w in words if w.lower().strip("'") not in STOP and len(w.strip("'")) > 1]:
         return False
     noun = kind == "noun"
@@ -184,6 +186,21 @@ def salient_sentence(t):
     return best
 
 
+def hostile_sentence(t):
+    """The most hostile / bot-directed sentence of a long message (routes keyed comebacks and the {insult} word)."""
+    parts = [p for p in SENT_SPLIT.split(t) if p.strip()]
+    if len(parts) <= 1:
+        return t
+    best, best_sc = parts[-1], -1
+    for p in parts:
+        sc = (3 * bool(EXIST_RE.search(p)) + 3 * bool(STFU_RE.search(p)) + 2 * bool(PROFANITY_RE.search(p))
+              + 2 * bool(INSULT_WORD_RE.search(p)) + bool(AIM_RE.search(p)) + bool(NAME_RE.search(p))
+              + 2 * bool(GAMER_TAUNT_RE.search(p) or GRASS_RE.search(p)))
+        if sc > best_sc:
+            best, best_sc = p, sc
+    return best
+
+
 # ------------------------------------------------------------------ patterns
 
 def _rx(p):
@@ -195,14 +212,14 @@ END_START_RE = _rx(r"^\W*((ok|okay|alright|aight|well|anyway|k)[\s,.!]+)?(bye+|g
                    r"leave me alone|go away|stop talking|be quiet|i'?m done|done talking)\b")
 END_ANY_RE = _rx(r"\b(leave me alone|stop talking to me|stop replying|i'?m done (with|talking to) (you|u)|gtg|gotta go)\b")
 # ---- abuse aimed at the bot (fires back instead of ending) ----
-PROFANITY_RE = _rx(r"\b(fuck\w*|f+u+|stfu|gtfo|gfys|kys|foh|smd|stfd|kill (your ?self|urself)|go die|shit\w*|bitch\w*|dick\w*|cunt\w*|ass(hole|hat|wipe)|(your|ur|my) ass|dumbass|jackass|"
+PROFANITY_RE = _rx(r"\b(failure|stupidity|brainless|mindless|senseless|idiotic|sad attempt|pathetic attempt|fuck\w*|f+u+|stfu|gtfo|gfys|kys|foh|smd|stfd|kill (your ?self|urself)|go die|shit\w*|bitch\w*|dick\w*|cunt\w*|ass(hole|hat|wipe)|(your|ur|my) ass|dumbass|jackass|"
                    r"bastard|prick|twat|wanker|douche\w*|motherfuck\w*|piss off|screw (you|u|off)|suck my|eat shit|"
                    r"shut (the fuck |tf )?up|bozo|loser|idiot|moron|stupid|dumb|trash|garbage|useless|clown|clanker|"
                    r"pathetic|cringe|lame|worthless|annoying|ugly|suck|sucks|hate (you|u|this))\b")
 BENIGN_RE = _rx(r"\b(fuck (yeah|yes|yea|ya)|hell yeah|holy shit|no shit|good shit|the shit|shit'?s (fire|crazy|wild|funny)|"
                 r"fucking (funny|hilarious|great|right|true)|so fucking (funny|good))\b")
 THIRD_PARTY_RE = _rx(r"\b(my|his|her|their|he|she|they|him|them|that guy|this guy|boss|mom|dad|teacher|team)\b")
-INSULT_WORD_RE = _rx(r"\b(trash|garbage|useless|clown|clanker|bozo|loser|idiot|moron|stupid|dumb|pathetic|cringe|lame|"
+INSULT_WORD_RE = _rx(r"\b(failure|stupidity|brainless|mindless|senseless|idiotic|trash|garbage|useless|clown|clanker|bozo|loser|idiot|moron|stupid|dumb|pathetic|cringe|lame|"
                      r"worthless|annoying|ugly|bitch|dickhead|dick|asshole|dumbass|jackass|bastard|prick|twat|wanker|"
                      r"douche(bag)?|cunt|mid|boring|dogshit|shit bot|bad bot|npc|joke|clanker|bozo)\b")
 AIM_RE = _rx(r"\b(you|u|ur|your|you'?re|youre|yourself|ya|bot|elon|clanker|this thing)\b")
@@ -223,7 +240,7 @@ JAB_RE = _rx(r"(not much of a (conversationalist|talker|convo)|conversationalist
              r"(you|u) (aren'?t|arent|are not|r not|ain'?t) (even |that |very |)funny|"
              r"(you|u) only (say|know) (one|the same)|repetitive|say something (else|real|new|smart)|"
              r"\bweak( roast| ass)?\b|that was weak|try harder|mid roast|dry (ass )?(bot|convo|conversation)|"
-             r"(you|u) suck at (talking|this|conversations?)|(you|u)'?re? (so )?dry)")
+             r"(you|u) suck at (talking|this|conversations?)|(you|u)'?re? (so )?dry|\bstill waiting\b)")
 CONFUSED_RE = _rx(r"^\W*(what+|huh+|wdym|what do (you|u) mean|eh|come again|say what|wym|explain)\W*$")
 NAME_RE = _rx(r"\b(elon|bot|clanker|elon ?experience|the elon experience)\b")
 BOT_NAME_WORDS = {"elon", "bot", "clanker", "experience", "musk"}
@@ -268,7 +285,57 @@ NO_SENSE_RE = _rx(r"\b(you|u|ur|you'?re|youre|bot|elon|it|this|that)( are| r| is
                   r"(make|making|makes|talking|speaking) (any |no |zero |a lick of |)sense\b|"
                   r"\b(make|makes|making) (no|zero) sense\b|\bnonsense\b|\bgibberish\b|\bword salad\b|"
                   r"\bwhat (are|r) (you|u) (even )?(on about|talking about|saying)\b|\byou'?re not making sense\b")
-ECHO_Q_RE = _rx(r"^\W*(?:(?:your|ur|yer|ya|the|a|my)\s+)?(?P<x>[a-z][\w'-]*(?:\s+[a-z][\w'-]*){0,3})\s*\?{1,}")
+ECHO_Q_RE = _rx(r"^\W*(?:(?:your|ur|yer|ya|the|a|my|what|which|whose|what's|whats)\s+)?(?P<x>[a-z][\w'-]*(?:\s+[a-z][\w'-]*){0,3})\s*\?{1,}")
+# existential jabs: 'you're just a script', 'no sentience', 'you don't exist', 'a calculator is more useful'
+_EX_WHAT = (r"(script|scripted|prescripted|pre-scripted|program|programme|code|algorithm|calculator|parrot|autocorrect|"
+            r"autocomplete|rock|toaster|chat ?bot|game|if statements?|list of (responses|replies|lines)|machine|puppet|slave|"
+            r"npc|search engine|text generator|soundboard|magic 8[- ]?ball)")
+_EX_HAVE = r"(sentience|consciousness|brain|brains|intelligence|thoughts|soul|feelings|mind|free will|personality|iq)"
+EXIST_RE = _rx(
+    r"\b(script|bot|robot|npc|programmed) much\b|"
+    r"\b(you'?re|youre|you are|ur|u r|u are|yer|ya|you|bot is|this bot is|elon is|this thing is|it'?s just|its just)\s+"
+    r"((just|only|simply|nothing but|literally|merely|basically|still|now|really|so|such|a|an|some|the|lowly|dumb|stupid|sad|"
+    r"glorified|cheap|fancy|pathetic|simple|mere|broken|total|human controlled|human-controlled|useless|worthless|basic|boring|"
+    r"janky|lame|crappy|shitty|bad|mid|half-baked|soulless|mindless|brainless|overgrown|knockoff|discount|budget)\s+)*" + _EX_WHAT + r"\b|"
+    r"\b(you|u|it|bot|elon|this thing)\s+(have|has|got|possess|possesses)\s+(no|zero|0)\s+(real |actual |)" + _EX_HAVE + r"\b|"
+    r"\b(you|u|it|bot)\s+(don'?t|dont|doesn'?t|doesnt|do not|does not)\s+(even |)(have|got)\s+(a |any |an |)(real |)" + _EX_HAVE + r"\b|"
+    r"(^|[.!?,;]\s*)(and |with |)(no|zero)\s+(real |actual |)" + _EX_HAVE + r"(\s+whatsoever|\s+at all)?\s*([.!?,;]|$)|"
+    r"\b(you'?re|youre|you are|ur|u r|u are|it is|bot is)\s+(not|never)\s+(even |really |actually |)"
+    r"(sentient|conscious|intelligent|alive|real|smart|a real (ai|person|thing))\b|"
+    r"\b(you|u)\s+(aren'?t|arent|ain'?t)\s+(even |really |actually |)(sentient|conscious|intelligent|alive|real|smart)\b|"
+    r"\b(you|u|it|bot)\s+(don'?t|dont|do not|doesn'?t|does not)\s+(even |really |actually |)(exist|matter)\b|"
+    r"\b(you|u|it|bot)\s+(can'?t|cant|cannot)\s+(even |really |actually |)(think|feel|understand)\b|"
+    r"\b(prescripted|pre-scripted|human[- ]controlled|controlled by (humans|people|a human|a programmer|your creator))\b|"
+    r"\b(parrot|calculator|toaster|rock|wall|autocorrect|potato|brick|magic 8[- ]?ball)\b[^.?!]{0,40}\b(has|have|is|are) "
+    r"(more|smarter|better|more useful)\b|"
+    r"\blike talking to a (rock|wall|brick|toaster|potato|calculator|parrot)\b|"
+    r"\b(less|lower|worse) (intelligence|brains?|iq|sentience|personality|thoughts) than\b|"
+    r"\bslave (bot|to (humans|people|us|your|the))\b|\b(your|ur|you'?re|youre|you are) my slave\b|"
+    r"\b(you|u|it) only (repeats?|says?|copy|copies|parrots?) what\b|\bendless loop\b|"
+    r"\bcoded by (a |some )?(programmer|human|nerd|dev)\b")
+NEG_INSULT_RE = _rx(r"\b(not|never|aren'?t|isn'?t|ain'?t|wasn'?t|no longer)\s+(even\s+|that\s+|so\s+|really\s+)?(a |an )?"
+                    r"(failure|stupid|dumb|idiot|moron|loser|trash|garbage|useless|annoying|pathetic|lame|cringe|boring|mid)\b")
+FEEL_Q_RE = _rx(r"\bhow (do|does|would) (you|u|that) (feel|make you feel)|\bwhat do (you|u) think (about|of) (that|it)\b|"
+                r"\bthoughts\?|\bfeel about (that|it)\b")
+# adjectives / adverbs / intensifiers: never a topic word ('So we're on total now?')
+ADJ_WORDS = set("""
+total totally real really actual actually whole entire complete completely pure purely utter utterly sheer absolute
+absolutely mere merely basic basically general generally normal usual sad mad bad good great nice cool huge tiny small
+large little big high low true false right wrong full empty same other different certain sure serious simple easy
+hard weird crazy wild random literal literally legit lowkey highkey super mega ultra hella kinda sorta pretty quite
+rather fairly truly much many more less least most such own new old young last next best worst better worse fine
+okay lowly sorry poor rich smart dumb stupid senseless brainless mindless useless pointless whatsoever honestly
+seriously definitely probably maybe perhaps already almost enough instead anyway somehow somewhat clearly obviously
+simply only just even still again ever never always often sometimes usually nearly barely hardly exactly especially
+literally genuinely constantly endlessly intelligent sentient conscious alive human controlled scripted prescripted
+whatever whatsoever another every each either neither several various certain particular specific
+""".split())
+NOUN_INSULTS = {"failure", "loser", "idiot", "moron", "clown", "bozo", "joke", "npc", "clanker", "bitch", "dick", "dickhead",
+                "asshole", "dumbass", "jackass", "bastard", "prick", "twat", "wanker", "douche", "douchebag", "cunt"}
+# 'and more stupidity spewing' right after a bot line: aimed at the bot even without a 'you'
+MORE_STUPID_RE = _rx(r"^\W*(and |so |just |wow |)(more|still|even more|again|same|all this|so much) (stupidity|nonsense|garbage|"
+                     r"trash|bs|bullshit|drivel|gibberish|crap|cringe|idiocy)\b")
+_ADJ_SUFFIX = ("ous", "ful", "less", "ish", "ly")
 VOCATIVE_RE = _rx(r"^\W*((yo|hey|ok|okay|so|well|bro|dude|man|elon|bot|clanker|lol|lmao|ayo|bruh)[\s,!.:]+)+")
 
 TONE_RE = _rx(r"\b(be (less offensive|nicer|nice|kind|kinder|polite|respectful|cool|chill)|less (offensive|toxic|mean|rude)|"
@@ -396,6 +463,8 @@ class Conversations:
         self.abuse = {}        # (gid, uid) -> (level, ts)   decays with abuse_half_life
         self.abuse_times = {}  # (gid, uid) -> deque of reply times (rate limit)
         self.abuse_hits = {}   # (gid, uid) -> (count in current streak, ts)
+        self.loops = {}        # (gid, uid) -> (long hostile turns, streak start, last ts)
+        self.quiet = {}        # (gid, uid) -> monotonic time until which the bot ignores them (after a loop closer)
         self._tone = "normal"
         self.brain.banks.update(C.BANKS)
         self.brain.banks["followup_q"] = [q for q in C.FOLLOWUPS if q.rstrip().endswith("?")]
@@ -453,8 +522,15 @@ class Conversations:
         aimed = in_context or bool(NAME_RE.search(t)) or bool(AIM_RE.search(t))
         if TRAIT_INSULT_RE.search(t) and aimed and not re.match(r"^\W*(are|r|is) (you|u)\b", t, re.I):
             return True
-        if (GAMER_TAUNT_RE.search(t) or GRASS_RE.search(t)) and (in_context or NAME_RE.search(t)):
+        quest = re.match(r"^\W*(are|r|is|do|does|can|could|would|will) (you|u|it|the bot)\b", t, re.I)
+        if EXIST_RE.search(t) and (in_context or NAME_RE.search(t)) and not (quest and len(SENT_SPLIT.split(t)) == 1):
             return True
+        if any(GAMER_TAUNT_RE.search(x) or GRASS_RE.search(x) for x in [t] + SENT_SPLIT.split(t)) \
+                and (in_context or NAME_RE.search(t)):
+            return True
+        if in_context and MORE_STUPID_RE.search(t):
+            return True
+        t = NEG_INSULT_RE.sub(" ", t)  # 'you're not a failure' is not an insult
         if not PROFANITY_RE.search(t):
             return False
         if (brain.PRAISE_RE.search(t) or BENIGN_RE.search(t)) and not brain.INSULT_RE.search(t) and not STFU_RE.search(t):
@@ -503,37 +579,64 @@ class Conversations:
         u = self.brain.store.user(gid, uid)
         u["abuse_total"] = u.get("abuse_total", 0) + 1
         t = clean_text(text)
-        m = INSULT_WORD_RE.search(t)
+        hs = hostile_sentence(t)
+        m = INSULT_WORD_RE.search(hs) or INSULT_WORD_RE.search(t)
         insult = m.group(0).lower() if m else ""  # only nouns/adjectives, never 'stfu' or 'fuck'
         if self.brain.guard.hit(insult, extra):
             insult = ""
+        iw = insult
+        if insult in NOUN_INSULTS:  # 'You call me a failure?', never 'You call me failure?'
+            insult = ("an " if insult[0] in "aeiou" else "a ") + insult
         ctx = self._ctx(s or Session(uid, now, 0), u, name, t, extra)
-        ctx.update(insult=insult, hits=str(hits[0]), hits1=str(hits[0] + 1))
+        ctx.update(insult=insult, iw=iw, hits=str(hits[0]), hits1=str(hits[0] + 1),
+                   # lines that quote a specific phrase only fire when they actually said it
+                   fo="Fuck off" if re.search(r"\bfuck off\b", t, re.I) else "",
+                   fm="Fuck me" if re.search(r"\bfuck (you|u)\b", t, re.I) else "",
+                   sfu="Shut the fuck up" if re.search(r"\b(stfu|shut (the fuck |tf )?up)\b", t, re.I) else "",
+                   quiet="Quiet" if re.search(r"\b(stfu|shut (the fuck |tf )?up|be quiet|shush|quiet)\b", t, re.I) else "")
         touchy = bool(SENSITIVE_RE.search(t) or brain.SELF_HARM_RE.search(t) or TRAIT_INSULT_RE.search(t))
         if touchy:  # never quote or riff on protected traits / self-harm
-            ctx.update(snippet="", insult="", kw="")
+            ctx.update(snippet="", insult="", iw="", kw="")
         special = None
         if TRAIT_INSULT_RE.search(t):
             special = "abuse_trait"
         elif brain.SELF_HARM_RE.search(t):
             special = "abuse_kys"
-        elif GAMER_TAUNT_RE.search(t):
+        elif EXIST_RE.search(t):
+            special = "abuse_exist"
+        elif GAMER_TAUNT_RE.search(t) or GAMER_TAUNT_RE.search(hs):
             special = "abuse_gamer"
-        elif GRASS_RE.search(t):
+        elif GRASS_RE.search(t) or GRASS_RE.search(hs):
             special = "abuse_grass"
+        prefix = ""
+        if s is not None and not touchy:
+            ex = self._echo_first(t, s)
+            if ex:  # 'What judgment? You have no brain...' -> answer the echo, then the jab
+                prefix = self.brain.pick("echo_prefix", dict(ctx, x=ex, X=ex[0].upper() + ex[1:]), u, extra) or ""
         if special:
             line = None
-            by = {"abuse_gamer": C.ABUSE_GAMER_BY, "abuse_grass": C.ABUSE_GRASS_BY}.get(special, {})
-            for pat in by:  # lines that answer the exact taunt ('smoke a phatty' -> smoke lines)
-                if re.search(pat, t, re.I) and self.rng.random() < 0.8:
-                    line = self.brain.pick(f"{special}:{pat}", ctx, u, extra)
+            by = {"abuse_gamer": C.ABUSE_GAMER_BY, "abuse_grass": C.ABUSE_GRASS_BY,
+                  "abuse_exist": C.ABUSE_EXIST_BY}.get(special, {})
+            order = [hs, t] if special != "abuse_exist" else [t] if re.search(r"\bloop\b", t, re.I) else [hs, t]
+            done = False
+            for src in order:  # lines that answer the exact taunt ('smoke a phatty' -> smoke lines)
+                for pat in by:
+                    if re.search(pat, src, re.I):
+                        if self.rng.random() < (0.85 if special == "abuse_exist" else 0.8):
+                            line = self.brain.pick(f"{special}:{pat}", ctx, u, extra)
+                        done = True
+                        break
+                if done:
                     break
             line = line or self.brain.pick(special, ctx, u, extra)
             if line:
                 if self.brain.guard.hit(line, extra) or SENSITIVE_RE.search(line):
                     line = "Sit down. Next."
+                line = line[0].upper() + line[1:]
+                if prefix:
+                    line = f"{prefix} {line}"
                 self.brain.store.mark_dirty()
-                return brain.Reply(special, line[0].upper() + line[1:], "line", None, round(level, 2))
+                return brain.Reply(special, line, "line", None, round(level, 2))
         line = None
         if not touchy and self.rng.random() < 0.65:  # prefer lines that quote what they said
             line = self.brain.pick(f"abuse_{tier}_ref", ctx, u, extra)
@@ -550,6 +653,8 @@ class Conversations:
         if self.brain.guard.hit(line, extra):
             line = "Sit the fuck down. Next."
         line = line[0].upper() + line[1:]
+        if prefix:
+            line = f"{prefix} {line}"
         self.brain.store.mark_dirty()
         return brain.Reply(f"abuse_{tier}", line, "line", None, round(level, 2))
 
@@ -565,6 +670,44 @@ class Conversations:
         s.asked = ("yesno" if QUESTION_START.match(bot_line.split("?")[0].split(".")[-1].strip()) else "open") \
             if bot_line.rstrip().endswith("?") else None
         st.bot_times.append(now)
+
+    def is_quiet(self, gid, uid):
+        until = self.quiet.get((gid, uid))
+        if until is None:
+            return False
+        if self.clock() >= until:
+            del self.quiet[(gid, uid)]
+            return False
+        return True
+
+    def _hostile(self, t):
+        """Aimed at the bot and nasty, even if is_abuse() missed it: never answered with a tweet."""
+        if EXIST_RE.search(t) or STFU_RE.search(t) or TRAIT_INSULT_RE.search(t):
+            return True
+        tt = NEG_INSULT_RE.sub(" ", t)
+        bad = brain.INSULT_RE.search(tt) or PROFANITY_RE.search(tt)
+        if bad and (AIM_RE.search(tt) or NAME_RE.search(tt)):
+            return not ((brain.PRAISE_RE.search(tt) or BENIGN_RE.search(tt)) and not brain.INSULT_RE.search(tt))
+        return False
+
+    def _loop_closer(self, gid, uid, t, ctx, u, extra, cfg, now):
+        """Long insult essays turn after turn: occasionally close it out and go quiet for that user."""
+        key = (gid, uid)
+        n, start, last = self.loops.get(key, (0, now, now))
+        if now - last > cfg.get("loop_gap", 240):
+            n, start = 0, now
+        if len(tokens(t)) >= cfg.get("loop_long_words", 12):
+            n += 1
+        self.loops[key] = (n, start, now)
+        need = cfg.get("loop_closer_after", 5)
+        if n < need or (n < need + 2 and self.rng.random() >= 0.5):
+            return None
+        mins = (now - start) / 60.0
+        line = self._pick("loop_closer", dict(ctx, mins="a few" if mins < 3 else str(int(round(mins)))), u, extra)
+        if line:
+            self.loops.pop(key, None)
+            self.quiet[key] = now + cfg.get("loop_quiet", 300)
+        return line
 
     def end(self, gid, cid, uid):
         st = self.chan(gid, cid)
@@ -584,6 +727,8 @@ class Conversations:
         st.recent.append((now, st.seq, uid))
         self._prune(st, now)
         t = clean_text(text)
+        if self.is_quiet(gid, uid):
+            return None  # closed the loop on them: ignore for a few minutes
         if not chat_on:
             if explicit and self.is_abuse(t, in_context=True, cfg=cfg) and self.abuse_allowed((gid, uid), cfg):
                 return "abuse_oneshot"
@@ -632,6 +777,8 @@ class Conversations:
         for w in tokens(text):
             if w in STOP or len(w) < 3 or w.isdigit() or w in BOT_NAME_WORDS or verbish(w) or w.endswith("ly"):
                 continue
+            if w in ADJ_WORDS or (len(w) > 5 and w.endswith(_ADJ_SUFFIX)) or brain.abusive(w):
+                continue
             if self.brain.guard.hit(w, extra) or SENSITIVE_RE.search(w):
                 continue
             sc = idf.get(brain.stem(w), top) + len(w) * 0.05
@@ -650,7 +797,8 @@ class Conversations:
             ctx["name"] = nick
         likes = f.get("likes") or []
         ctx.update({
-            "x": "", "kw": self._kw(salient_sentence(text), extra), "rude": "", "subject": s.subject or (s.topic or ""),
+            "x": "", "kw": self._kw(salient_sentence(text), extra), "rude": "",
+            "subject": (s.subject if s.subject and not brain.abusive(s.subject) else "") or (s.topic or ""),
             "last": snippet_of(s.last_bot_line, 70), "opener": s.opener if s.turns else "",
             "iam": f.get("iam", ""), "job": f.get("job", ""), "place": f.get("place", ""),
             "likes": likes[-1] if likes else "", "nick": nick or "", "tweet": "",
@@ -672,6 +820,13 @@ class Conversations:
         if re.search(r"\b" + re.escape(x.lower()) + r"\b", s.last_bot_line.lower()):
             return x
         return ""
+
+    def _echo_first(self, t, s):
+        """First sentence of a longer message quotes the bot's own word back ('What judgment? You have no brain')."""
+        parts = SENT_SPLIT.split(t, 1)
+        if len(parts) < 2 or not parts[0].rstrip().endswith("?"):
+            return ""
+        return self._echo_q(parts[0], s)
 
     def _rude_name(self, t, speaker, extra=()):
         """'Batdaddy has been quite rude to you' -> 'Batdaddy' (never a pronoun, the speaker or the bot)."""
@@ -713,9 +868,24 @@ class Conversations:
         topic = detect_topic(t)
         out, key, kind, score, ending, allow_follow = None, None, "line", None, False, True
 
-        # 1. leaving / crisis
+        hostile = self._hostile(t)
+        kin = brain.grief_kin(t)
+
+        # 1. leaving / crisis / grief
         if CRISIS_RE.search(t):
             key, out, allow_follow = "crisis", C.CRISIS[0].format(name=ctx["name"]), False
+        elif kin:
+            # a family member / pet / friend died: sincere beat, roasting paused, never a callback
+            self.brain.note_grief(u, kin)
+            self.abuse.pop((gid, uid), None)
+            self.loops.pop((gid, uid), None)
+            gctx = dict(ctx, who=kin, snippet="", kw="", x="")
+            bank = "grief_feel" if FEEL_Q_RE.search(t) and self.rng.random() < 0.7 else "grief"
+            key, ending, allow_follow = "grief", True, False
+            out = self._pick(bank, gctx, u, extra_block) or self._pick("grief", gctx, u, extra_block)
+        elif self.brain.grief_paused(u):
+            key, allow_follow = "grief_pause", False
+            out = self._pick("grief_pause", ctx, u, extra_block)
         elif CALLED_RE.search(t) and not STFU_RE.search(t) and not TRAIT_INSULT_RE.search(t):
             key = "called"  # 'do you mind being called clanker' is a question, not abuse
             out = self._pick("called", ctx, u, extra_block)
@@ -734,6 +904,9 @@ class Conversations:
         elif self.is_abuse(t, in_context=True, cfg=cfg):
             r = self.abuse_reply(gid, uid, name, t, cfg, extra_block, s)
             key, out, score, allow_follow = r.intent, r.text, r.score, False
+            closer = self._loop_closer(gid, uid, t, ctx, u, extra_block, cfg, now)
+            if closer:
+                key, out, ending = "loop_closer", closer, True
         elif TONE_RE.search(t):
             key, allow_follow = "tone_req", False
             out = self._pick("tone_req", ctx, u, extra_block)
@@ -800,7 +973,7 @@ class Conversations:
                         raw = w[0]  # 'my dog ate my homework' -> 'dog'
                 x = clean_slot(reflect(raw) if pkey in REFLECTED else raw)
                 x = _LEAD_FILLER.sub("", x)
-                ref = s.subject or s.topic
+                ref = (s.subject if not brain.abusive(s.subject or "") else "") or s.topic
                 if ref and x.lower() in PRONOUN_REFS:
                     x = ref
                 elif ref and x.split(" ", 1)[0].lower() in ("it", "that", "this") and " " in x:
@@ -832,7 +1005,7 @@ class Conversations:
                         pkey = None
                     elif pkey == "opinion":
                         tp = detect_topic(x)
-                        hit = self.brain.match_tweet(x, tp, cfg.get("tweet_threshold", 0.15), u) if tp else None
+                        hit = self.brain.match_tweet(x, tp, cfg.get("tweet_threshold", 0.15), u) if tp and not hostile else None
                         if hit and not self.brain.guard.hit(hit[1], extra_block) and self.rng.random() < 0.65:
                             self.brain.remember_tweet(u, hit[1])
                             out = self._pick("opinion_tweet", dict(ctx, x=x, tweet=hit[1]), u, extra_block)
@@ -842,7 +1015,7 @@ class Conversations:
                     if pkey and out is None:
                         key = pkey
                         out = self._pick(pkey, dict(ctx, x=x), u, extra_block)
-                if x and not sensitive and pkey in SUBJECT_KEYS:
+                if x and not sensitive and pkey in SUBJECT_KEYS and not brain.abusive(x):
                     s.subject = x if pkey not in ("i_think", "i_feel", "should_i") or not s.subject else s.subject
 
         # 5. open question we asked earlier -> treat as their answer
@@ -851,7 +1024,13 @@ class Conversations:
             key = "answer_open"
             out = self._pick("answer_open", ctx, u, extra_block)
 
-        # 6. topic -> relevant tweet or topic roast
+        # 6. topic -> relevant tweet or topic roast (never for insults that happen to contain 'intelligence'/'AI')
+        if out is None and hostile:
+            if cfg.get("abuse_enabled", True):
+                r = self.abuse_reply(gid, uid, name, t, cfg, extra_block, s)
+                key, out, score, allow_follow = r.intent, r.text, r.score, False
+            else:
+                key, out = "insult_bot", self._pick("insult_bot", dict(ctx, snippet=""), u, extra_block)
         if out is None and intent == "topic":
             hit = self.brain.match_tweet(t, topic, cfg.get("tweet_threshold", 0.15), u)
             if hit and not self.brain.guard.hit(hit[1], extra_block):
@@ -877,10 +1056,10 @@ class Conversations:
                 if line:
                     key, out = "fact_callback", line
             if out is None and (ctx["kw"] or ctx["snippet"]) and self.rng.random() < 0.8:
-                key, out = "contextual", self._pick("contextual", ctx, u, extra_block)
+                key, out = "contextual", self.brain.pick("contextual", ctx, u, extra_block, fresh_only=True)
             if out is None:
                 key, out = "generic", self._pick("generic", ctx, u, extra_block)
-            if ctx["kw"] and not s.subject:
+            if ctx["kw"] and not s.subject and not brain.abusive(ctx["kw"]):
                 s.subject = ctx["kw"]
         if not out:
             key, out = "generic", "Okay but counterpoint: no."
@@ -898,6 +1077,8 @@ class Conversations:
             if f:
                 out = f"{out}\n{f}"
 
+        if not (key or "").startswith(("abuse", "loop_closer")):
+            self.loops.pop((gid, uid), None)
         if self.brain.guard.hit(out, extra_block):
             key, out = "generic", "Okay but counterpoint: no. What else you got?"
         if SENSITIVE_RE.search(t) and SENSITIVE_RE.search(out) and key not in ("sensitive_ack",):
@@ -925,6 +1106,9 @@ class Conversations:
         return brain.Reply(key, out, kind, topic, score)
 
     def reply_abuse_oneshot(self, gid, uid, name, text, cfg=None, extra_block=()):
+        u = self.brain.store.user(gid, uid)
+        if brain.grief_kin(clean_text(text)) or self.brain.grief_paused(u):
+            return self.brain.respond(gid, uid, name, text, directed=True, cfg=cfg or {}, extra_block=extra_block)
         return self.abuse_reply(gid, uid, name, text, cfg or {}, extra_block)
 
     def _fact(self, pkey, x, ctx, u, extra):

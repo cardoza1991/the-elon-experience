@@ -159,6 +159,15 @@ def artifact(seed=1):
     return h
 
 
+def carebear(seed=1):
+    """Live transcript 15:56-16:01 UTC (Artifact + Carebear Cubby): grief, existential jabs, no tweets for insults."""
+    from tests.test_carebear import TRANSCRIPT
+    h = Harness(seed)
+    for who, text, mention, _ in TRANSCRIPT:
+        h.send(*who, text, mention=mention, gap=25)
+    return h
+
+
 def abuser(seed=4):
     h = Harness(seed)
     n = "Dex"
@@ -175,7 +184,8 @@ if __name__ == "__main__":
     for title, fn in (("1. Michael's server regression", batdad), ("2. Facts, opinions, pronouns", mechanic),
                       ("3. Group conversation", group), ("4. Abuse escalation", abuser),
                       ("5. Live bug replay (single replies)", live_bug), ("6. Kindness + creator", kindness),
-                      ("7. Artifact (slang, trait insult, mock pity)", artifact)):
+                      ("7. Artifact (slang, trait insult, mock pity)", artifact),
+                      ("8. Artifact + Carebear (grief, existential jabs, no tweets for insults)", carebear)):
         print(f"=== {title} ===")
         print(fn().transcript())
         print()

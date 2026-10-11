@@ -337,7 +337,7 @@ async def decide_reply(message):
         elif mode == "oneshot":
             if BRAIN.allow_directed(g.id, author.id, c):
                 reply = BRAIN.respond(g.id, author.id, name_of(author), text, directed=True, cfg=c, extra_block=xb)
-        elif not CONVO.in_session(g.id, ch.id, author.id) and BRAIN.should_jump(g.id, ch.id, author.id, text, c, parent):
+        elif not CONVO.in_session(g.id, ch.id, author.id) and not CONVO.is_quiet(g.id, author.id) and BRAIN.should_jump(g.id, ch.id, author.id, text, c, parent):
             reply = BRAIN.respond(g.id, author.id, name_of(author), text, directed=False, cfg=c, extra_block=xb)
             if chat_on and not other_target:
                 CONVO.after_jump_in(g.id, ch.id, author.id, reply.text, c, text)

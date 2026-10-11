@@ -80,6 +80,45 @@ PROTECTED_RE = re.compile(
 SELF_HARM_RE = re.compile(r"\b(kys|kill (your ?self|urself|yaself|yoself)|go die|neck (your ?self|urself)|"
                           r"unalive (your ?self|urself)|end (your ?self|urself))\b", re.I)
 
+# abusive words / slang: never become a {fav}, {kw}, {subject}, {x} or callback slot
+ABUSIVE_RE = re.compile(
+    r"\b(gfys|kys|foh|smd|stfu|gtfo|stfd|fu|fk|fck\w*|fuk\w*|fuck\w*|f+u+|shit\w*|bitch\w*|dick\w*|cunt\w*|cock\w*|"
+    r"pussy|asshole\w*|ass|asses|dumbass|jackass|bastard\w*|prick\w*|twat\w*|wanker\w*|douche\w*|motherf\w*|piss\w*|"
+    r"bozo|loser\w*|idiot\w*|moron\w*|stupid\w*|dumb\w*|trash|garbage|useless|clown\w*|clanker\w*|pathetic|cringe|"
+    r"worthless|retard\w*|slut\w*|whore\w*|suck|sucks|sucker|kill|die|dead|death|suicid\w*|unalive|neck|"
+    r"damn|hell|crap|wtf|stfd|ugly|fat)\b", re.I)
+
+
+def abusive(text):
+    return bool(text and (ABUSIVE_RE.search(text) or SELF_HARM_RE.search(text)))
+
+
+# grief: a user's family member / pet / friend died. Never roasted, never quoted back, never a callback.
+_KIN = (r"(mom|mommy|mum|mother|mama|momma|ma|dad|daddy|father|papa|pops|parents?|step ?(mom|dad|mother|father)|"
+        r"grand(ma|pa|mother|father|parents?|dad|mom)|granny|nana|nan|brother|sister|bro|sis|sibling|son|daughter|"
+        r"kid|child|baby|wife|husband|partner|fianc[eé]e?|girlfriend|boyfriend|gf|bf|uncle|aunt|auntie|cousin|"
+        r"best friend|friend|bestie|dog|cat|puppy|kitty|pet|family)")
+GRIEF_RE = re.compile(
+    r"\bmy (late |dear |)" + _KIN + r"\b('?s| is| was| has| just| recently| passed|,)?\s*"
+    r"(just |recently |finally |already |)(is |was |has |had |)(dead|died|passed( away| on)?|gone(?! (for|to|on|out|till|until|at|away|shopping|again|now|home|crazy|wild|viral))|no longer (with us|alive|here)|"
+    r"killed|murdered|in heaven|deceased|buried|not alive|not here anymore|lost (her|his|their) (battle|fight))\b(?! (tired|serious|ass|wrong|inside))|"
+    r"\b(lost|losing|buried|burying) my " + _KIN + r"\b|\bmy " + _KIN + r"'?s (funeral|wake|memorial|obituary|grave)\b|"
+    r"\b(rip|rest in peace) (to )?my " + _KIN + r"\b|\bmy late " + _KIN + r"\b", re.I)
+FAMILY_RE = re.compile(r"\b(mom|mom'?s|moms|mommy|mum|mother|mama|momma|yo mama|dad|dad'?s|daddy|father|papa|pops|parents?|"
+                       r"grandma|grandpa|granny|family|orphan\w*|funeral|dead|died|death)\b", re.I)
+
+
+def grief_kin(text):
+    m = GRIEF_RE.search(text or "")
+    if not m:
+        return ""
+    k = re.search(r"\b" + _KIN + r"\b", m.group(0), re.I)
+    w = (k.group(0) if k else "family").lower()
+    return {"mum": "mum", "mommy": "mom", "momma": "mom", "mama": "mom", "ma": "mom", "daddy": "dad", "papa": "dad",
+            "pops": "dad", "gf": "girlfriend", "bf": "boyfriend", "bro": "brother", "sis": "sister",
+            "kitty": "cat", "puppy": "dog"}.get(w, w)
+
+
 VULGAR_RE = re.compile(r"\b(fuck\w*|shit\w*|bitch\w*|ass\b|asshole|dick\w*|piss\w*|cunt|bullshit|damn|hell)\b", re.I)
 
 
@@ -371,11 +410,15 @@ class Brain:
         t = clean_text(text)
         if not t:
             return
+        if GRIEF_RE.search(t):  # sensitive: never stored, never quoted back or counted
+            self.store.mark_dirty()
+            return
         u["msgs"].append([int(time.time()), t[:300]])
         del u["msgs"][: -self.MAX_MSGS]
         w = u["words"]
         for term in tokens(t):
-            if term not in STOP and len(term) > 2 and not self.guard.hit(term) and not term.isdigit():
+            if (term not in STOP and len(term) > 2 and not self.guard.hit(term) and not term.isdigit()
+                    and not abusive(term) and not PROTECTED_RE.search(term)):
                 w[term] = w.get(term, 0) + 1
         if len(w) > 80:  # keep the top 60
             for k, _ in sorted(w.items(), key=lambda kv: kv[1])[: len(w) - 60]:
@@ -385,12 +428,14 @@ class Brain:
         self.store.mark_dirty()
 
     def fav_word(self, u):
-        w = [(c, k) for k, c in u.get("words", {}).items() if c >= 3]
+        w = [(c, k) for k, c in u.get("words", {}).items()
+             if c >= 3 and not abusive(k) and not PROTECTED_RE.search(k) and not self.guard.hit(k)]
         return max(w)[1] if w else None
 
     def callback_quote(self, u, extra=()):
         old = [m[1] for m in u.get("msgs", [])[:-2] if 12 <= len(m[1]) <= 140]
-        old = [m for m in old if not self.guard.hit(m, extra) and not URL_RE.search(m)]
+        old = [m for m in old if not self.guard.hit(m, extra) and not URL_RE.search(m) and not abusive(m)
+               and not GRIEF_RE.search(m) and not PROTECTED_RE.search(m)]
         if not old:
             return None
         return snippet_of(self.rng.choice(old[-10:]), 70)
@@ -406,12 +451,35 @@ class Brain:
             return None
 
     NO_ECHO_BANKS = {"followup", "followup_q", "abuse_tag"}
+    GRIEF_BANKS = {"grief", "grief_pause"}
+    GRIEF_PAUSE = 900  # seconds the roasting stays off for someone who just told us about a loss
+
+    # ---- grief ----
+    def note_grief(self, u, kin):
+        f = u.setdefault("facts", {})
+        loss = f.setdefault("loss", [])
+        if kin and kin not in loss:
+            loss.append(kin)
+            del loss[:-5]
+        f["grief_until"] = self.clock() + self.GRIEF_PAUSE
+        self.store.mark_dirty()
+
+    def grief_paused(self, u):
+        f = u.get("facts") or {}
+        until = f.get("grief_until")
+        if not until:
+            return False
+        left = until - self.clock()
+        if left <= 0 or left > self.GRIEF_PAUSE:  # expired (or a stale value from before a restart)
+            f.pop("grief_until", None)
+            return False
+        return True
 
     def echo_allowed(self, u):
         """Lines that quote their whole message back: max ~1 in 4 replies, never two in a row."""
         return not any(u.get("echo", [])[-3:])
 
-    def pick(self, bank_name, ctx, u, extra=()):
+    def pick(self, bank_name, ctx, u, extra=(), fresh_only=False):
         bank = self.banks[bank_name]
         recent = u.setdefault("recent", [])
         record = bank_name not in self.NO_ECHO_BANKS
@@ -420,9 +488,12 @@ class Brain:
         if ctx.get("snippet") and (no_echo or (mild and VULGAR_RE.search(ctx["snippet"]))):
             ctx = dict(ctx, snippet="")
         said = ctx.get("_said") or ""
+        no_family = bool(u.get("facts", {}).get("loss"))
         options = []
         for i, line in enumerate(bank):
             if mild and VULGAR_RE.search(line):
+                continue
+            if no_family and bank_name not in self.GRIEF_BANKS and FAMILY_RE.search(line):
                 continue
             lid = f"{bank_name}:{i}"
             text = self._fill(line, ctx)
@@ -446,6 +517,8 @@ class Brain:
             if slot and self.rng.random() < 0.65:
                 pool = slot
             lid, text, echo, _ = self.rng.choice(pool)
+        elif fresh_only:
+            return None
         else:  # everything was used recently: take the oldest one
             order = {k: n for n, k in enumerate(recent)}
             lid, text, echo, _ = min(options, key=lambda o: order.get(o[0], -1))
@@ -500,7 +573,7 @@ class Brain:
         if name:  # 'King Batdad [DEAD]' -> 'King Batdad'
             short = re.sub(r"\s*[\[\(\{<|].*?([\]\)\}>|]|$)\s*", " ", name).strip()
             name = short if len(short) >= 2 else name
-        name = name if name and not self.guard.hit(name, extra) else "bro"
+        name = name if name and not self.guard.hit(name, extra) else "pal"
         snip = snippet_of(text)
         if len(re.findall(r"[.!?]\s+\S", snip)) >= 1:
             snip = ""  # multi-sentence messages never get parroted back whole
@@ -528,6 +601,14 @@ class Brain:
         ctx = self.context(u, name, text, topic, extra_block)
         ctx["_tone"] = cfg.get("tone", "normal")
         reply = None
+        kin = grief_kin(clean_text(text))
+        if kin or self.grief_paused(u):
+            if kin:
+                self.note_grief(u, kin)
+            bank = "grief" if kin else "grief_pause"
+            line = (self.pick(bank, dict(ctx, who=kin or "family"), u, extra_block) if bank in self.banks else None) \
+                or ("Damn. Sorry for your loss. That one's off the roast menu." if kin else "Not roasting you right now.")
+            return Reply(bank, line, "line", None)
 
         if intent == "topic":
             hit = self.match_tweet(text, topic, cfg.get("tweet_threshold", 0.15), u)
@@ -561,6 +642,8 @@ class Brain:
     def roast(self, gid, uid, name, extra_block=()):
         """!roast @user - targeted roast using what we remember about them."""
         u = self.store.user(gid, uid)
+        if self.grief_paused(u):
+            return f"Not today. {name} gets a pass for a bit." if name else "Not today."
         last = u["msgs"][-1][1] if u.get("msgs") else ""
         ctx = self.context(u, name, last, None, extra_block)
         bank = "targeted" if self.rng.random() < 0.6 else "generic"

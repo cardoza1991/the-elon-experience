@@ -23,7 +23,7 @@ FIRE_LO = [
     "Fire? It's a wet match.", "Not fire. Not even smoke.", "Respectfully: no.", "This is the opposite of fire. It's damp.",
     "Fire department has been notified there's no fire.", "No. But I admire the confidence, {name}.",
     "That's a candle someone blew out.", "Hmm. No.", "I wanted to say yes. The pixels said no.",
-    "Fire? Bro, it's an ice cube.", "Not fire. Barely a spark.", "That's a big no from the judging panel. The panel is me.",
+    "Fire? Friend, it's an ice cube.", "Not fire. Barely a spark.", "That's a big no from the judging panel. The panel is me.",
     "Ice cold, and not in the good way.", "No, {name}. Just no.",
 ]
 
@@ -65,7 +65,7 @@ DARK_BLURRY = [
     "Is this a photo or a hostage video from inside a pocket?",
     "Dark, blurry, mysterious. Like a Bigfoot sighting but less evidence.",
     "Taken with the flash off and the hope on. Neither worked.",
-    "My guy took a picture of the concept of night.",
+    "Someone took a picture of the concept of night.",
     "Camera was scared of the dark and so am I now.",
     "This looks like a dream I forgot. Not in a good way.",
     "Ah yes, the classic 'pocket shot at 2am' composition.",
